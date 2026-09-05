@@ -19,15 +19,16 @@ from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, bro
 class BrowserNormalizationTests(unittest.TestCase):
     def test_release_bundle_is_first_and_contains_a_matched_driver(self):
         with tempfile.TemporaryDirectory() as root:
-            browser = Path(root) / "browser" / "chrome-win64" / "chrome.exe"
-            driver = Path(root) / "browser" / "chromedriver-win64" / "chromedriver.exe"
+            root_path = Path(root).resolve()
+            browser = root_path / "browser" / "chrome-win64" / "chrome.exe"
+            driver = root_path / "browser" / "chromedriver-win64" / "chromedriver.exe"
             browser.parent.mkdir(parents=True)
             driver.parent.mkdir(parents=True)
             browser.touch()
             driver.touch()
-            self.assertEqual(bundled_chrome_paths(Path(root)), (str(browser), str(driver)))
-            self.assertEqual(browser_candidates("auto", Path(root))[0], ("chrome", str(browser)))
-            self.assertIn(("chrome", str(browser)), browser_candidates("edge", Path(root)))
+            self.assertEqual(bundled_chrome_paths(root_path), (str(browser), str(driver)))
+            self.assertEqual(browser_candidates("auto", root_path)[0], ("chrome", str(browser)))
+            self.assertIn(("chrome", str(browser)), browser_candidates("edge", root_path))
 
     def test_installed_edge_failure_retains_managed_chrome_fallback(self):
         with tempfile.TemporaryDirectory() as root:
