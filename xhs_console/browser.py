@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 NOTE_PATH = re.compile(r"/(?:explore|discovery/item|search_result)/([a-fA-F0-9]{24})(?:/|$)")
 ALLOWED_HOSTS = ("xiaohongshu.com", "xhslink.com")
+XHS_HOME = "https://www.xiaohongshu.com/explore"
 
 
 class NeedsInteraction(RuntimeError):
@@ -161,6 +162,16 @@ def browser_candidates(preference: str = "auto") -> list[tuple[str, str | None]]
     return candidates
 
 
+def browser_connection_arguments(direct_connection: bool) -> tuple[str, ...]:
+    """Return explicit Chromium proxy arguments for the selected network mode.
+
+    ``--no-proxy-server`` ignores system/PAC HTTP proxies. It intentionally does
+    not claim to bypass VPN/TUN or router-level routing, which sits below the
+    browser's proxy configuration.
+    """
+    return ("--no-proxy-server", "--proxy-bypass-list=*") if direct_connection else ()
+
+
 ACCESS_SCRIPT = r"""
 const visible = el => !!el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
 const firstVisible = selector => Array.from(document.querySelectorAll(selector)).find(visible);
@@ -201,9 +212,10 @@ class BrowserSession:
         self.remote = None
         self._known_handles: set[str] = set()
         self.browser = ""
+        self.direct_connection = True
         self._extract_script = Path(__file__).with_name("extract_note.js").read_text(encoding="utf-8")
 
-    def open(self, headless: bool = False, browser: str = "auto") -> None:
+    def open(self, headless: bool = False, browser: str = "auto", direct_connection: bool = True) -> None:
         if self.driver is not None:
             return
         from selenium import webdriver
@@ -222,6 +234,8 @@ class BrowserSession:
             options.add_argument("--window-size=1365,900")
             options.add_argument("--no-first-run")
             options.add_argument("--no-default-browser-check")
+            for argument in browser_connection_arguments(direct_connection):
+                options.add_argument(argument)
             if headless:
                 options.add_argument("--headless=new")
             service_type = ChromeService if name == "chrome" else EdgeService
@@ -234,6 +248,7 @@ class BrowserSession:
                 constructor = webdriver.Chrome if name == "chrome" else webdriver.Edge
                 self.driver = constructor(options=options, service=service)
                 self.browser = name
+                self.direct_connection = direct_connection
                 self.driver.set_page_load_timeout(30)
                 self.driver.set_script_timeout(15)
                 # A manually opened viewer is a general-purpose browser. Keep
@@ -249,7 +264,8 @@ class BrowserSession:
                     self.remote.start()
                 except Exception as exc:
                     self.emit("warning", f"实时交互画面暂不可用（{type(exc).__name__}），仍可查看浏览器截图")
-                self.emit("success", f"{name.title()} 已启动；本项目的登录状态会保存在独立配置目录")
+                network = "直连网络（已忽略系统 HTTP/HTTPS 代理）" if direct_connection else "跟随系统代理"
+                self.emit("success", f"{name.title()} 已启动，当前使用{network}；登录状态保存在独立配置目录")
                 return
             except Exception as exc:
                 service.stop()
@@ -301,7 +317,8 @@ class BrowserSession:
         driver = self._require_driver()
         self._sync_active_tab()
         viewport = driver.execute_script("return {width: innerWidth, height: innerHeight};")
-        return {"url": driver.current_url, "title": driver.title, "width": viewport["width"], "height": viewport["height"], "browser": self.browser}
+        return {"url": driver.current_url, "title": driver.title, "width": viewport["width"], "height": viewport["height"],
+                "browser": self.browser, "network_mode": "direct" if self.direct_connection else "system"}
 
     def _sync_active_tab(self) -> None:
         """Follow tabs opened in the embedded viewport, on Selenium's owner only."""
@@ -353,7 +370,7 @@ class BrowserSession:
         elif kind == "forward":
             driver.forward()
         elif kind == "home":
-            self.navigate("https://www.xiaohongshu.com/explore")
+            self.navigate(XHS_HOME)
         elif kind == "navigate":
             self.navigate(str(action.get("url", "")))
         elif kind == "refresh":
@@ -379,6 +396,25 @@ class BrowserSession:
         started = time.monotonic()
         self.checkpoint(seconds)
         return max(0.0, time.monotonic() - started - seconds)
+
+    def prepare_collection(self, config) -> None:
+        """Open the XHS home page and require a real persisted login session.
+
+        Browser startup and a rendered page are not evidence of authentication.
+        A collection run proceeds only after Xiaohongshu exposes its login cookie;
+        access restrictions are reported before the login check so an IP-risk page
+        can never be presented as a login prompt or a successful login.
+        """
+        driver = self._require_driver()
+        driver.set_page_load_timeout(config.page_timeout)
+        self.emit("info", "开始采集：正在进入小红书首页并检查登录状态")
+        self.navigate(XHS_HOME)
+        self.checkpoint(1)
+        self._check_access()
+        session = driver.get_cookie("web_session")
+        if not session or not str(session.get("value") or "").strip():
+            raise NeedsInteraction("已进入小红书首页，但尚未检测到登录会话；请在上方完成登录，完成后点击「已处理，继续」")
+        self.emit("success", "已进入小红书首页，并检测到本机保存的登录会话")
 
     def search(self, config) -> list[str]:
         driver = self._require_driver()

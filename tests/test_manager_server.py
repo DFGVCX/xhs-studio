@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from selenium.common.exceptions import InvalidSessionIdException
 from starlette.websockets import WebSocketDisconnect
 
-from xhs_console.browser import NeedsInteraction
+from xhs_console.browser import NeedsInteraction, XHS_HOME
 from xhs_console.config import Settings
 from xhs_console.manager import JobManager
 from xhs_console.server import create_app
@@ -29,12 +29,15 @@ class FakeBrowser:
         self.failures = 0
         self.closed = False
         self.images = []
+        self.open_options = {}
+        self.visited = []
 
     def owned(self):
         assert threading.get_ident() == self.owner, "Concurrent WebDriver access"
 
     def open(self, **kwargs):
         self.owned()
+        self.open_options = dict(kwargs)
 
     def close(self):
         self.owned()
@@ -44,7 +47,8 @@ class FakeBrowser:
         self.owned()
         if self.closed:
             raise InvalidSessionIdException("Browser closed")
-        return dict(url=self.url, title="Test", width=1280, height=800, browser="fake")
+        return dict(url=self.url, title="Test", width=1280, height=800, browser="fake",
+                    network_mode="direct" if self.open_options.get("direct_connection", True) else "system")
 
     def screenshot(self):
         self.owned()
@@ -53,6 +57,13 @@ class FakeBrowser:
     def navigate(self, url):
         self.owned()
         self.url = url
+        self.visited.append(url)
+
+    def prepare_collection(self, config):
+        self.owned()
+        self.navigate(XHS_HOME)
+        if self.gated:
+            raise NeedsInteraction("请登录后继续")
 
     def interact(self, action):
         self.owned()
@@ -150,6 +161,8 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(result["counts"]["success"], 1)
         self.assertTrue(result["exports"])
         self.assertNotIn("test-secret", str(result["results"]))
+        self.assertEqual(self.manager._browser.visited[0], XHS_HOME)
+        self.assertTrue(self.manager._browser.open_options["direct_connection"])
         self.manager.start(self.config)
         result = self.wait({"completed", "error"})
         self.assertEqual(result["counts"]["skipped"], 1)

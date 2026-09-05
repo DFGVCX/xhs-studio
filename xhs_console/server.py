@@ -27,6 +27,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 class BrowserOptions(BaseModel):
     headless: bool = True
     browser: Literal["auto", "chrome", "edge"] = "auto"
+    direct_connection: bool = True
 
 
 class BrowserAction(BaseModel):
@@ -260,7 +261,7 @@ def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
 
     @app.post("/api/browser/open")
     def open_browser(options: BrowserOptions, request: Request):
-        request.app.state.manager.open_browser(options.headless, options.browser)
+        request.app.state.manager.open_browser(options.headless, options.browser, options.direct_connection)
         return {"accepted": True}
 
     @app.post("/api/browser/close")

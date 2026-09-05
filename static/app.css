@@ -259,7 +259,7 @@ font-size:17px;
 color:var(--muted);
 font-weight:400;
 margin-left:12px}
-.live-label{
+.live-label,.network-label{
 display:flex;
 align-items:center;
 gap:6px;
@@ -279,6 +279,15 @@ border-radius:50%}
 color:#355e3e;
 background:var(--mint);
 border-color:var(--ink)}
+.network-label{
+color:#69521e;
+background:#fff4bd}
+.network-label.direct{
+color:#234e39;
+background:var(--mint)}
+.network-label.system{
+color:#76522a;
+background:#ffe4bd}
 .browser-heading-actions{
 display:flex;
 align-items:center;
@@ -829,11 +838,23 @@ display:grid;
 grid-template-columns:minmax(220px,1.3fr) repeat(2,minmax(140px,1fr)) minmax(180px,1.2fr);
 gap:24px;
 padding:2px 0 23px}
+.browser-option-list{
+display:flex;
+align-items:stretch;
+flex-wrap:wrap;
+gap:14px 28px;
+padding-bottom:22px}
 .browser-option{
-width:fit-content;
+width:min(100%,560px);
 max-width:100%;
-padding-bottom:22px;
 gap:28px}
+.browser-option-list .browser-option{
+padding:12px 14px;
+border:1px dashed #b6a790;
+border-radius:8px;
+background:color-mix(in srgb,var(--raised) 62%,transparent)}
+.browser-option-list .browser-option>span{
+flex:1}
 .settings-footer{
 display:flex;
 align-items:center;

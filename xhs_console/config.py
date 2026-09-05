@@ -119,6 +119,7 @@ class Settings(BaseModel):
     download_images: bool = True
     skip_existing: bool = True
     headless: bool = True
+    direct_connection: bool = True
     browser: Literal["auto", "chrome", "edge"] = "auto"
     naming: Literal["title", "id", "content"] = "title"
 
@@ -203,6 +204,8 @@ def load_settings(project_dir: Path | str) -> Settings:
     config["urls"] = normalize_urls(urls[:1000])
     # The embedded browser provides login and direct input without another window.
     config["headless"] = True
+    # Keep collection traffic independent from ambient HTTP/PAC proxy settings.
+    config["direct_connection"] = True
     return Settings.model_validate(config)
 
 

@@ -148,12 +148,12 @@ class JobManager:
         if self._state["status"] in ACTIVE:
             raise ValueError("当前任务仍在进行，请先停止任务。")
 
-    def open_browser(self, headless=True, browser="auto"):
+    def open_browser(self, headless=True, browser="auto", direct_connection=True):
         with self._lock:
             self._require_free()
             self._stop.clear()
             self._update(status="opening", phase="browser", message="正在启动浏览器…", error=None)
-            self._commands.put(("open", (headless, browser)))
+            self._commands.put(("open", (headless, browser, direct_connection)))
 
     def close_browser(self):
         with self._lock:
@@ -232,8 +232,8 @@ class JobManager:
             except queue.Full:
                 raise ValueError("操作过于频繁，请稍候再试。")
 
-    def _ensure_browser(self, headless, browser):
-        options = (headless, browser)
+    def _ensure_browser(self, headless, browser, direct_connection=True):
+        options = (headless, browser, direct_connection)
         if self._browser is not None:
             try:
                 self._browser.info()
@@ -246,7 +246,7 @@ class JobManager:
             candidate = self.browser_factory(self.project_dir, self.emit, self.checkpoint)
             self._browser = candidate
             try:
-                candidate.open(headless=headless, browser=browser)
+                candidate.open(headless=headless, browser=browser, direct_connection=direct_connection)
                 self._browser_options = options
                 self._update(browser_open=True)
                 self._capture(force=True)
@@ -372,8 +372,10 @@ class JobManager:
         terminal = "completed"
         try:
             store = ResultStore(self.project_dir, config.keyword)
-            self._ensure_browser(config.headless, config.browser)
+            self._ensure_browser(config.headless, config.browser, config.direct_connection)
             self.checkpoint()
+            self._update(phase="prepare", message="正在进入小红书首页并检查登录状态…")
+            self._with_interaction(lambda: self._browser.prepare_collection(config))
             urls = list(config.urls) if config.mode == "urls" else []
             if config.mode == "search":
                 self._update(phase="search", message=f"正在搜索「{config.keyword}」…")

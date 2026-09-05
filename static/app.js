@@ -3,11 +3,11 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const form = $("config-form");
-  const boolFields = ["download_images", "skip_existing", "headless"];
+  const boolFields = ["download_images", "skip_existing", "headless", "direct_connection"];
   const numberFields = ["search_seconds", "max_notes", "interval_seconds", "page_timeout", "retries"];
   const textFields = ["keyword", "browser", "naming"];
   const activeStates = new Set(["opening", "running", "paused", "waiting_login", "stopping"]);
-  const statusLabels = {idle:"等待开始", opening:"正在连接浏览器", ready:"浏览器已就绪", running:"采集中", paused:"已接管 · 采集暂停", waiting_login:"等待处理网页提示", stopping:"正在停止", stopped:"已停止", completed:"采集完成", error:"需要处理异常"};
+  const statusLabels = {idle:"等待开始", opening:"正在连接浏览器", ready:"浏览器已就绪", running:"采集中", paused:"已接管 · 采集暂停", waiting_login:"等待登录或页面处理", stopping:"正在停止", stopped:"已停止", completed:"采集完成", error:"需要处理异常"};
   let config = null;
   let state = null;
   let mode = "search";
@@ -245,6 +245,11 @@
     $("current-note").textContent = next.current_note || "暂无正在处理的笔记";
     $("browser-url").textContent = next.browser?.url || "";
     $("browser-engine").textContent = (next.browser?.browser || "BROWSER").toUpperCase();
+    const networkMode = next.browser?.network_mode;
+    $("network-mode").hidden = !next.browser_open;
+    $("network-mode").className = `network-label ${networkMode === "direct" ? "direct" : "system"}`;
+    $("network-mode").textContent = networkMode === "direct" ? "直连网络" : "系统代理";
+    $("network-mode").title = networkMode === "direct" ? "已忽略系统 HTTP/HTTPS 代理；VPN、TUN 或路由器出口仍可能生效" : "当前浏览器跟随系统代理设置";
     $("live-label").className = `live-label${next.browser_open ? " online" : ""}`;
     $("live-label").lastChild.textContent = next.browser_open ? "已连接" : "未连接";
     $("frame-time").textContent = next.frame_at ? `页面同步 ${timeText(next.frame_at)}` : "浏览器在本机运行";
@@ -324,11 +329,11 @@
       switchTab(event.key === "Home" ? names[0] : event.key === "End" ? names[3] : names[(index + (event.key === "ArrowRight" ? 1 : 3)) % 4], true);
     });
   }
-  form.addEventListener("submit", (event) => { event.preventDefault(); if (form.reportValidity()) command("/api/jobs/start", readConfig(), "已开始采集"); });
+  form.addEventListener("submit", (event) => { event.preventDefault(); if (form.reportValidity()) command("/api/jobs/start", readConfig(), "正在进入小红书首页并检查登录"); });
   $("start-job").addEventListener("click", () => { if (!form.checkValidity()) switchTab("settings"); });
   $("save-config").addEventListener("click", () => { if (form.reportValidity()) command("/api/config", readConfig(), "参数已保存"); });
   $("reset-config").addEventListener("click", () => { if (config) { populate(config); toast("已还原到最近保存的参数"); } });
-  $("open-browser").addEventListener("click", () => command("/api/browser/open", {headless:$("headless").checked, browser:$("browser").value}, "正在连接页内浏览器"));
+  $("open-browser").addEventListener("click", () => command("/api/browser/open", {headless:$("headless").checked, browser:$("browser").value, direct_connection:$("direct_connection").checked}, "正在连接页内浏览器"));
   $("close-browser").addEventListener("click", () => command("/api/browser/close"));
   $("takeover-browser").addEventListener("click", () => command("/api/jobs/pause", undefined, "正在暂停采集，随后即可直接操作网页"));
   $("pause-job").addEventListener("click", () => command(`/api/jobs/${["paused","waiting_login"].includes(state?.status) ? "resume" : "pause"}`));

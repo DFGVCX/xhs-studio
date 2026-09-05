@@ -9,10 +9,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
 
-from xhs_console.browser import BrowserSession, deduplicate_note_urls, normalize_note, normalize_note_url, normalize_xhs_url, validate_navigation_url
+from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_connection_arguments,
+                                 deduplicate_note_urls, normalize_note, normalize_note_url,
+                                 normalize_xhs_url, validate_navigation_url)
 
 
 class BrowserNormalizationTests(unittest.TestCase):
+    def test_direct_connection_explicitly_bypasses_browser_proxy(self):
+        self.assertEqual(browser_connection_arguments(True), ("--no-proxy-server", "--proxy-bypass-list=*"))
+        self.assertEqual(browser_connection_arguments(False), ())
+
     def test_signed_href_replaces_unsigned_but_keeps_discovery_order(self):
         first = "674000000000000001001001"
         second = "674000000000000001001002"
@@ -83,6 +89,43 @@ class BrowserNormalizationTests(unittest.TestCase):
 
 
 class BrowserPauseTests(unittest.TestCase):
+    def test_collection_opens_home_and_waits_without_login_cookie(self):
+        visited = []
+
+        class Driver:
+            def set_page_load_timeout(self, seconds):
+                self.timeout = seconds
+
+            def get_cookie(self, name):
+                self.cookie_name = name
+                return None
+
+        session = BrowserSession(Path("."), lambda *_: None, lambda *_: None)
+        session.driver = Driver()
+        session.navigate = visited.append
+        session._check_access = lambda: None
+        with self.assertRaisesRegex(NeedsInteraction, "尚未检测到登录会话"):
+            session.prepare_collection(SimpleNamespace(page_timeout=12))
+        self.assertEqual(visited, [XHS_HOME])
+        self.assertEqual(session.driver.cookie_name, "web_session")
+
+    def test_collection_continues_only_with_login_cookie(self):
+        class Driver:
+            def set_page_load_timeout(self, seconds):
+                pass
+
+            def get_cookie(self, name):
+                return {"name": name, "value": "local-session"}
+
+        events = []
+        session = BrowserSession(Path("."), lambda level, message: events.append((level, message)), lambda *_: None)
+        session.driver = Driver()
+        session.navigate = lambda url: events.append(("navigate", url))
+        session._check_access = lambda: None
+        session.prepare_collection(SimpleNamespace(page_timeout=12))
+        self.assertIn(("navigate", XHS_HOME), events)
+        self.assertTrue(any(level == "success" and "登录会话" in message for level, message in events))
+
     def test_long_manual_pause_does_not_exhaust_detail_timeout(self):
         clock = [0.0]
         calls = [0]
