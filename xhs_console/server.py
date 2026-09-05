@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .config import Settings, load_settings, save_settings
+from .config import Settings, load_settings, resolve_output_root, save_settings
 from .browser import validate_navigation_url
 from .manager import JobManager
 
@@ -28,6 +28,36 @@ class BrowserOptions(BaseModel):
     headless: bool = True
     browser: Literal["auto", "chrome", "edge"] = "auto"
     direct_connection: bool = True
+
+
+class FolderOptions(BaseModel):
+    current: str = Field(default="Information", min_length=1, max_length=1024)
+
+
+def choose_output_directory(initial: Path) -> str | None:
+    """Show a local native folder picker only after the user clicks the button."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise RuntimeError("当前 Python 环境没有可用的本地文件夹选择器，请直接输入绝对路径。") from exc
+    candidate = initial
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.attributes("-topmost", True)
+        root.update_idletasks()
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="选择小红书采集内容保存位置",
+            initialdir=str(candidate if candidate.is_dir() else Path.home()),
+            mustexist=True,
+        )
+        return selected or None
+    finally:
+        root.destroy()
 
 
 class BrowserAction(BaseModel):
@@ -269,6 +299,18 @@ def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
         request.app.state.manager.close_browser()
         return {"accepted": True}
 
+    @app.post("/api/folders/select")
+    def select_folder(options: FolderOptions):
+        try:
+            initial = resolve_output_root(project_dir, Settings(output_dir=options.current).output_dir)
+            selected = choose_output_directory(initial)
+            if not selected:
+                return {"cancelled": True, "path": None}
+            validated = Settings(output_dir=selected).output_dir
+            return {"cancelled": False, "path": validated}
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @app.post("/api/browser/action")
     def action(body: BrowserAction, request: Request):
         request.app.state.manager.interact(body.model_dump())
@@ -286,8 +328,12 @@ def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
         return {"accepted": True}
 
     @app.get("/api/files/{relative_path:path}")
-    def download(relative_path: str):
-        root = (project_dir / "Information").resolve()
+    def download(relative_path: str, request: Request):
+        current = request.app.state.manager.snapshot().get("config", {})
+        try:
+            root = resolve_output_root(project_dir, current.get("output_dir", "Information"))
+        except ValueError as exc:
+            raise HTTPException(404, "当前任务的保存路径不可用。") from exc
         path = (root / relative_path).resolve()
         if not path.is_relative_to(root) or not path.is_file() or "console" not in path.relative_to(root).parts:
             raise HTTPException(404, "文件不存在。")

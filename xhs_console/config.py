@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _RESERVED_FILENAME = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", re.I)
 _NOTE_PATH = re.compile(r"^/(?:explore|search_result|discovery/item)/([0-9a-fA-F]{24})/?$")
+DEFAULT_OUTPUT_DIR = "Information"
 
 
 def clean_filename(value: str, max_length: int = 80) -> str:
@@ -42,6 +43,34 @@ def _keyword(value: str) -> str:
     ):
         raise ValueError("关键词不能包含路径、Windows 保留名称或文件名非法字符")
     return value
+
+
+def _output_dir(value: str) -> str:
+    """Validate a local output root without expanding variables or network paths."""
+    text = str(value).strip()
+    if not text or len(text) > 1024 or any(ord(character) < 32 for character in text):
+        raise ValueError("保存路径不能为空、包含控制字符或超过 1024 个字符")
+    if text.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")) or text.startswith("~"):
+        raise ValueError("保存路径仅支持本机磁盘或项目内相对目录，不支持网络、设备或用户缩写路径")
+    path = Path(text)
+    if not path.is_absolute() and any(part == ".." for part in path.parts):
+        raise ValueError("相对保存路径不能离开项目目录")
+    invalid_parts = path.parts[1:] if path.drive else path.parts
+    if any(re.search(r'[<>:"|?*]', part) for part in invalid_parts):
+        raise ValueError("保存路径包含 Windows 不支持的字符")
+    return str(path)
+
+
+def resolve_output_root(project_dir: Path | str, output_dir: str = DEFAULT_OUTPUT_DIR) -> Path:
+    """Resolve an approved output root; relative paths remain inside the project."""
+    root = Path(project_dir).resolve()
+    configured = Path(_output_dir(output_dir))
+    resolved = configured.resolve() if configured.is_absolute() else (root / configured).resolve()
+    if not configured.is_absolute() and not resolved.is_relative_to(root):
+        raise ValueError("相对保存路径不能离开项目目录")
+    if resolved.exists() and not resolved.is_dir():
+        raise ValueError("保存路径指向文件，请选择文件夹")
+    return resolved
 
 
 def _validated_url(value: str) -> str:
@@ -122,6 +151,7 @@ class Settings(BaseModel):
     direct_connection: bool = True
     browser: Literal["auto", "chrome", "edge"] = "auto"
     naming: Literal["title", "id", "content"] = "title"
+    output_dir: str = DEFAULT_OUTPUT_DIR
 
     @field_validator("keyword")
     @classmethod
@@ -132,6 +162,11 @@ class Settings(BaseModel):
     @classmethod
     def validate_urls(cls, value: list[str]) -> list[str]:
         return normalize_urls(value)
+
+    @field_validator("output_dir")
+    @classmethod
+    def validate_output_dir(cls, value: str) -> str:
+        return _output_dir(value)
 
     @model_validator(mode="after")
     def validate_mode(self) -> "Settings":

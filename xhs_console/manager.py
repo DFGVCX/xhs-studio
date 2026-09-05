@@ -371,7 +371,8 @@ class JobManager:
         store = None
         terminal = "completed"
         try:
-            store = ResultStore(self.project_dir, config.keyword)
+            store = ResultStore(self.project_dir, config.keyword, config.output_dir)
+            self.emit("info", f"本次内容将保存到：{store.directory}")
             self._ensure_browser(config.headless, config.browser, config.direct_connection)
             self.checkpoint()
             self._update(phase="prepare", message="正在进入小红书首页并检查登录状态…")

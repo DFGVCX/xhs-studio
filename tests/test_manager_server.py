@@ -303,7 +303,14 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(client.post("/api/browser/open", json={}, headers={"Origin": "https://evil.example"}).status_code, 403)
                 self.assertEqual(client.get("/api/files/..%2F..%2Fparameter.txt").status_code, 404)
                 self.assertEqual(client.post("/api/browser/action", json={"type": "click", "x": 2}).status_code, 422)
-                config = Settings(keyword="API测试", mode="urls", urls=[URL], download_images=False).model_dump()
+                chosen = root / "chosen output"
+                chosen.mkdir()
+                with patch("xhs_console.server.choose_output_directory", return_value=str(chosen)):
+                    folder = client.post("/api/folders/select", json={"current": "Information"})
+                self.assertEqual(folder.status_code, 200)
+                self.assertEqual(Path(folder.json()["path"]), chosen)
+                config = Settings(keyword="API测试", mode="urls", urls=[URL], download_images=False,
+                                  output_dir=str(chosen)).model_dump()
                 self.assertEqual(client.post("/api/jobs/start", json=config).status_code, 200)
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
@@ -316,6 +323,7 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(source.status_code, 307)
                 self.assertIn("xsec_token=test-secret", source.headers["location"])
                 self.assertTrue(state["exports"])
+                self.assertTrue((chosen / "API测试" / "console").is_dir())
                 for export in state["exports"]:
                     response = client.get(export["url"])
                     self.assertEqual(response.status_code, 200, export)

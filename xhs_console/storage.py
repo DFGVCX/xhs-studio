@@ -21,7 +21,7 @@ from urllib.parse import quote, urljoin, urlsplit
 import requests
 from PIL import Image, UnidentifiedImageError
 
-from .config import Settings, _atomic_json, _keyword, clean_filename, normalize_urls, note_id
+from .config import Settings, _atomic_json, _keyword, clean_filename, normalize_urls, note_id, resolve_output_root
 
 
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
@@ -163,13 +163,19 @@ def _atomic_text(path: Path, writer: Callable, encoding: str = "utf-8") -> None:
 class ResultStore:
     """One collection per keyword, with an upsert index keyed by the stable note ID."""
 
-    def __init__(self, project_dir: Path | str, keyword: str):
+    def __init__(self, project_dir: Path | str, keyword: str, output_dir: str = "Information"):
         self.project_dir = Path(project_dir).resolve()
         self.keyword = _keyword(keyword)
-        self.directory = self.project_dir / "Information" / self.keyword / "console"
+        self.output_root = resolve_output_root(self.project_dir, output_dir)
+        self.directory = self.output_root / self.keyword / "console"
         self.directory.mkdir(parents=True, exist_ok=True)
         (self.directory / "Images").mkdir(exist_ok=True)
-        self._path = self.project_dir / "runtime" / "collections" / self.keyword / "notes.json"
+        default_root = resolve_output_root(self.project_dir)
+        if self.output_root == default_root:
+            self._path = self.project_dir / "runtime" / "collections" / self.keyword / "notes.json"
+        else:
+            root_key = hashlib.sha256(os.path.normcase(str(self.output_root)).encode("utf-8")).hexdigest()[:16]
+            self._path = self.project_dir / "runtime" / "collections" / "by-output" / root_key / self.keyword / "notes.json"
         self._lock = threading.RLock()
         self._notes: dict[str, dict] = {}
         if self._path.exists():
@@ -364,6 +370,6 @@ class ResultStore:
             result = []
             for path in (md_path, text_path, json_path, csv_path, zip_path, self.directory / "links.txt"):
                 if path.exists():
-                    relative = path.relative_to(self.project_dir / "Information").as_posix()
+                    relative = path.relative_to(self.output_root).as_posix()
                     result.append({"name": path.name, "url": "/api/files/" + quote(relative, safe="/")})
             return result

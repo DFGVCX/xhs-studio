@@ -735,6 +735,79 @@ margin-top:7px;
 line-height:1.6}
 .urls-field{
 margin-top:23px}
+.storage-path-card{
+position:relative;
+display:grid;
+grid-template-columns:auto minmax(180px,.72fr) minmax(360px,1.55fr);
+align-items:center;
+gap:17px 22px;
+padding:18px 20px;
+margin-top:24px;
+border:2px solid var(--ink);
+border-radius:9px;
+background:linear-gradient(102deg,#fff2b9 0 31%,var(--raised) 31% 100%);
+box-shadow:4px 4px 0 var(--ink)}
+.storage-path-card:after{
+content:"LOCAL";
+position:absolute;
+right:12px;
+top:-11px;
+padding:1px 8px;
+border:1.5px solid var(--ink);
+border-radius:4px;
+background:var(--coral);
+color:var(--ink);
+font:12px/1.45 var(--mono);
+transform:rotate(2deg)}
+.storage-stamp{
+width:42px;
+height:42px;
+display:grid;
+place-items:center;
+border:2px solid var(--ink);
+border-radius:50%;
+background:var(--orange);
+box-shadow:2px 2px 0 var(--ink)}
+.storage-stamp svg{
+width:23px;
+height:23px;
+fill:none;
+stroke:currentColor;
+stroke-width:1.8;
+stroke-linejoin:round}
+.storage-copy{
+display:flex;
+flex-direction:column;
+gap:3px}
+.storage-copy label{
+font:20px/1.35 var(--font-display);
+color:var(--ink)}
+.storage-copy span,.storage-path-control small{
+font-size:13px;
+line-height:1.55;
+color:var(--dim)}
+.storage-path-control{
+display:grid;
+grid-template-columns:minmax(220px,1fr) auto;
+gap:8px 12px;
+align-items:center}
+.storage-path-control input{
+font-family:var(--mono);
+font-size:13px}
+.storage-path-control small{
+grid-column:1/-1}
+.storage-path-control code{
+padding:1px 4px;
+border:1px solid #b6a790;
+border-radius:3px;
+background:var(--panel);
+color:var(--text)}
+.storage-actions{
+display:flex;
+align-items:center;
+gap:12px}
+.path-button{
+min-height:42px}
 .capture-options{
 display:flex;
 align-items:center;
@@ -1281,6 +1354,8 @@ font-size:26px}
 .config-grid{
 grid-template-columns:minmax(220px,1.6fr) repeat(3,minmax(115px,1fr));
 gap:20px}
+.storage-path-card{
+grid-template-columns:auto minmax(170px,.65fr) minmax(320px,1.35fr)}
 .capture-options{
 gap:34px}
 .capture-note{
@@ -1330,6 +1405,11 @@ grid-template-columns:repeat(3,1fr)}
 .config-grid:has(#search-time-group[hidden]){
 grid-template-columns:repeat(2,1fr)}
 .keyword-field{
+grid-column:1/-1}
+.storage-path-card{
+grid-template-columns:auto 1fr;
+background:linear-gradient(102deg,#fff2b9 0 44%,var(--raised) 44% 100%)}
+.storage-path-control{
 grid-column:1/-1}
 .capture-options{
 flex-wrap:wrap;
@@ -1536,6 +1616,19 @@ grid-column:1/-1}
 font-size:14px}
 .field-help{
 font-size:14px}
+.storage-path-card{
+grid-template-columns:auto 1fr;
+gap:14px;
+padding:17px 15px;
+background:var(--raised)}
+.storage-copy label{
+font-size:18px}
+.storage-path-control{
+grid-template-columns:1fr}
+.storage-actions,.storage-path-control small{
+grid-column:1}
+.storage-actions{
+justify-content:space-between}
 .capture-options{
 display:flex;
 flex-direction:column;

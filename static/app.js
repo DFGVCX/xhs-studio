@@ -5,7 +5,7 @@
   const form = $("config-form");
   const boolFields = ["download_images", "skip_existing", "headless", "direct_connection"];
   const numberFields = ["search_seconds", "max_notes", "interval_seconds", "page_timeout", "retries"];
-  const textFields = ["keyword", "browser", "naming"];
+  const textFields = ["keyword", "browser", "naming", "output_dir"];
   const activeStates = new Set(["opening", "running", "paused", "waiting_login", "stopping"]);
   const statusLabels = {idle:"等待开始", opening:"正在连接浏览器", ready:"浏览器已就绪", running:"采集中", paused:"已接管 · 采集暂停", waiting_login:"等待登录或页面处理", stopping:"正在停止", stopped:"已停止", completed:"采集完成", error:"需要处理异常"};
   let config = null;
@@ -21,9 +21,9 @@
   let logKey = "";
   let exportKey = "";
 
-  async function api(path, method = "GET", body) {
+  async function api(path, method = "GET", body, timeoutMs = 15000) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(path, {method, cache:"no-store", signal:controller.signal,
         headers:body === undefined ? {} : {"Content-Type":"application/json"},
@@ -35,7 +35,7 @@
       }
       return data;
     } catch (error) {
-      if (error.name === "AbortError") throw new Error("服务响应超时，请稍后重试。");
+      if (error.name === "AbortError") throw new Error(path === "/api/folders/select" ? "文件夹选择已超时，请重试或直接输入路径。" : "服务响应超时，请稍后重试。");
       if (error instanceof TypeError) throw new Error("无法连接本地服务，请确认启动程序正在运行。");
       throw error;
     } finally { clearTimeout(timeout); }
@@ -318,6 +318,22 @@
     } finally { busy = false; controls(); }
   }
 
+  async function chooseOutputDirectory() {
+    if (busy) return;
+    busy = true; controls();
+    try {
+      const result = await api("/api/folders/select", "POST", {current:$("output_dir").value.trim() || "Information"}, 300000);
+      if (!result.cancelled && result.path) {
+        $("output_dir").value = result.path;
+        toast("已选择本地保存位置");
+      }
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      busy = false; controls();
+    }
+  }
+
   for (const button of document.querySelectorAll("[data-mode]")) button.addEventListener("click", () => selectMode(button.dataset.mode));
   for (const button of document.querySelectorAll("[data-workspace-tab]")) {
     button.addEventListener("click", () => switchTab(button.dataset.workspaceTab));
@@ -333,6 +349,8 @@
   $("start-job").addEventListener("click", () => { if (!form.checkValidity()) switchTab("settings"); });
   $("save-config").addEventListener("click", () => { if (form.reportValidity()) command("/api/config", readConfig(), "参数已保存"); });
   $("reset-config").addEventListener("click", () => { if (config) { populate(config); toast("已还原到最近保存的参数"); } });
+  $("choose-output-dir").addEventListener("click", chooseOutputDirectory);
+  $("default-output-dir").addEventListener("click", () => { $("output_dir").value = "Information"; toast("已恢复项目内默认保存位置"); });
   $("open-browser").addEventListener("click", () => command("/api/browser/open", {headless:$("headless").checked, browser:$("browser").value, direct_connection:$("direct_connection").checked}, "正在连接页内浏览器"));
   $("close-browser").addEventListener("click", () => command("/api/browser/close"));
   $("takeover-browser").addEventListener("click", () => command("/api/jobs/pause", undefined, "正在暂停采集，随后即可直接操作网页"));
