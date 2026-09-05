@@ -10,10 +10,12 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_candidates,
-                                 browser_connection_arguments, browser_display_arguments, bundled_chrome_paths,
+                                 browser_connection_arguments, browser_display_arguments, browser_recovery_arguments,
+                                 bundled_chrome_paths,
                                  configure_browser_binary, debugger_address_from_capabilities,
                                  deduplicate_note_urls, normalize_note, normalize_note_url,
-                                 normalize_xhs_url, stop_service_safely, validate_navigation_url)
+                                 normalize_xhs_url, stop_service_safely, unsupported_windows_message,
+                                 validate_navigation_url)
 
 
 class BrowserNormalizationTests(unittest.TestCase):
@@ -70,9 +72,19 @@ class BrowserNormalizationTests(unittest.TestCase):
 
     def test_embedded_display_uses_offscreen_window_not_headless_mode(self):
         arguments = browser_display_arguments(True)
-        self.assertIn("--window-position=-32000,-32000", arguments)
+        self.assertIn("--window-position=-10000,-10000", arguments)
         self.assertFalse(any(argument.startswith("--headless") for argument in arguments))
         self.assertEqual(browser_display_arguments(False), ())
+
+    def test_recovery_mode_uses_software_rendering_without_disabling_sandbox(self):
+        arguments = browser_recovery_arguments(True)
+        self.assertIn("--disable-gpu", arguments)
+        self.assertNotIn("--no-sandbox", arguments)
+        self.assertEqual(browser_recovery_arguments(False), ())
+
+    def test_old_windows_gets_an_explicit_browser_support_error(self):
+        with patch("xhs_console.browser.os.name", "nt"), patch("xhs_console.browser.sys.getwindowsversion", return_value=SimpleNamespace(major=6, minor=3)):
+            self.assertIn("Windows Server 2016", unsupported_windows_message())
 
     def test_signed_href_replaces_unsigned_but_keeps_discovery_order(self):
         first = "674000000000000001001001"
@@ -144,6 +156,58 @@ class BrowserNormalizationTests(unittest.TestCase):
 
 
 class BrowserPauseTests(unittest.TestCase):
+    def test_bundled_chrome_crash_retries_with_isolated_software_profile(self):
+        class FakeService:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def stop(self):
+                pass
+
+        class FakeDriver:
+            capabilities = {"goog:chromeOptions": {"debuggerAddress": "127.0.0.1:9001"}}
+            current_window_handle = "CDwindow-chrome"
+            window_handles = [current_window_handle]
+
+            def set_page_load_timeout(self, _seconds):
+                pass
+
+            def set_script_timeout(self, _seconds):
+                pass
+
+            def get(self, _url):
+                pass
+
+        class FakeTransport:
+            def __init__(self, *_args):
+                pass
+
+            def start(self):
+                pass
+
+            def wait_until_ready(self, timeout):
+                return True
+
+        driver = FakeDriver()
+        events = []
+        with tempfile.TemporaryDirectory() as root:
+            chrome = Path(root) / "chrome.exe"
+            executable = Path(root) / "chromedriver.exe"
+            chrome.touch()
+            executable.touch()
+            session = BrowserSession(Path(root), lambda level, message: events.append((level, message)), lambda *_: None)
+            with (patch("xhs_console.browser.browser_candidates", return_value=[("chrome", str(chrome))]),
+                  patch("xhs_console.browser.bundled_chrome_paths", return_value=(str(chrome), str(executable))),
+                  patch("selenium.webdriver.Chrome", side_effect=[RuntimeError("Chrome failed to start: crashed"), driver]) as constructor,
+                  patch("selenium.webdriver.chrome.service.Service", FakeService),
+                  patch("xhs_console.remote_browser.RemoteBrowserTransport", FakeTransport)):
+                session.open(headless=True, browser="auto")
+        self.assertEqual(constructor.call_count, 2)
+        recovery_options = constructor.call_args_list[1].kwargs["options"]
+        self.assertIn("--disable-gpu", recovery_options.arguments)
+        self.assertTrue(any("chrome-compat" in argument for argument in recovery_options.arguments))
+        self.assertTrue(any("软件渲染" in message for _, message in events))
+
     def test_edge_without_live_frame_is_closed_and_falls_back_to_bundled_chrome(self):
         class FakeService:
             def __init__(self, **kwargs):
@@ -213,7 +277,7 @@ class BrowserPauseTests(unittest.TestCase):
         self.assertTrue(edge_driver.quit_called)
         self.assertIs(session.driver, chrome_driver)
         self.assertEqual(session.browser, "chrome")
-        self.assertTrue(any(level == "warning" and "备用浏览器" in message for level, message in events))
+        self.assertTrue(any(level == "warning" and "备用启动方式" in message for level, message in events))
 
     def test_collection_opens_home_and_waits_without_login_cookie(self):
         visited = []

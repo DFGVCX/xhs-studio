@@ -8,14 +8,14 @@
 
 ## 下载即用（推荐）
 
-适用于 Windows 10 / 11 64 位系统，不需要安装 Python，也不需要执行命令。
+适用于 Windows 10 / 11 64 位系统及 Windows Server 2016 或更高版本，不需要安装 Python，也不需要执行命令。
 
 1. 打开 [Releases](https://github.com/DFGVCX/xhs-studio/releases/latest)，下载 `XHS-Studio-Windows-x64-版本号.zip`。
 2. 将 ZIP **完整解压**到一个普通文件夹，不要直接在压缩包内运行。
 3. 双击 `XHS-Studio.exe`。工作台会自动打开 `http://127.0.0.1:8765`。
 4. 保持启动窗口开启；关闭该窗口即退出工作台。
 
-电脑只需 Windows 10 / 11 64 位系统。Release 已自带版本匹配的 Chrome for Testing 与 ChromeDriver，打开页内浏览器不依赖服务器上已安装的 Chrome / Edge，也不需要临时下载驱动。浏览网页和采集内容本身仍需联网。应用没有购买代码签名证书，Windows 首次运行可能显示 SmartScreen 提示；请只从本仓库 Release 下载，并用同页提供的 SHA256 文件校验压缩包。
+电脑只需 Windows 10 / 11 64 位系统，Windows Server 需为 2016 或更高版本。Release 已自带版本匹配的 Chrome for Testing 与 ChromeDriver，打开页内浏览器不依赖服务器上已安装的 Chrome / Edge，也不需要临时下载驱动。浏览网页和采集内容本身仍需联网。应用没有购买代码签名证书，Windows 首次运行可能显示 SmartScreen 提示；请只从本仓库 Release 下载，并用同页提供的 SHA256 文件校验压缩包。
 
 ## 第一次使用
 
@@ -52,6 +52,10 @@
 ### 浏览器打开了，但提示“实时画面连接不可用”
 
 这表示浏览器进程已启动，但本机 DevTools 调试通道没有产出可操作画面。最新版会等待首帧确认；Edge 无法建立实时画面时，会关闭该实例并自动切换到 Release 内置 Chrome。公司管理的电脑如果禁用了浏览器开发者工具，系统 Edge 可能无法提供该通道，此时请将“浏览器内核”设为“自动选择”，使用内置 Chrome。
+
+### 提示 `Unable to obtain driver` 或 `Chrome failed to start: crashed`
+
+这是浏览器启动阶段的错误，还没有进入网页采集。最新版在内置 Chrome 标准启动失败后，会自动使用独立干净配置与软件渲染再试一次，并将完整 ChromeDriver 日志保存到 `runtime/logs`。请完整解压 ZIP 后运行，不要只复制 EXE。内置 Chrome 支持 Windows 10/11 x64 与 Windows Server 2016 及以上版本；Windows 7/8、Windows Server 2012/2012 R2 无法运行当前安全版本的 Chrome。
 
 ### 小红书提示“安全限制 / IP 存在风险 / 300012”
 

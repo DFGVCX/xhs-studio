@@ -207,10 +207,40 @@ def browser_display_arguments(embedded_only: bool) -> tuple[str, ...]:
     if not embedded_only:
         return ()
     return (
-        "--window-position=-32000,-32000",
+        "--window-position=-10000,-10000",
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
         "--disable-features=CalculateNativeWinOcclusion",
+    )
+
+
+def browser_recovery_arguments(enabled: bool) -> tuple[str, ...]:
+    """Use a conservative renderer only after a bundled Chrome startup crash.
+
+    The normal launch keeps hardware acceleration and the persistent login
+    profile.  A second, isolated profile avoids stale profile locks/corruption,
+    while software rendering covers Windows Server and VM display drivers.
+    Chromium's sandbox deliberately remains enabled.
+    """
+    if not enabled:
+        return ()
+    return (
+        "--disable-gpu",
+        "--disable-extensions",
+        "--disable-background-networking",
+    )
+
+
+def unsupported_windows_message() -> str | None:
+    """Explain the hard OS floor of the current bundled Chromium runtime."""
+    if os.name != "nt" or not hasattr(sys, "getwindowsversion"):
+        return None
+    version = sys.getwindowsversion()
+    if version.major >= 10:
+        return None
+    return (
+        f"当前 Windows 内核版本 {version.major}.{version.minor} 不受内置 Chrome 支持；"
+        "请使用 Windows 10/11 x64 或 Windows Server 2016 及以上版本"
     )
 
 
@@ -303,78 +333,96 @@ class BrowserSession:
         errors = []
         bundled = bundled_chrome_paths()
         for name, binary in browser_candidates(browser):
-            profile = self.project_dir / "runtime" / "profiles" / name
-            profile.mkdir(parents=True, exist_ok=True)
-            options = webdriver.ChromeOptions() if name == "chrome" else webdriver.EdgeOptions()
-            options.page_load_strategy = "eager"
-            configure_browser_binary(options, binary)
-            options.add_argument(f"--user-data-dir={profile}")
-            options.add_argument("--window-size=1365,900")
-            options.add_argument("--no-first-run")
-            options.add_argument("--no-default-browser-check")
-            for argument in browser_connection_arguments(direct_connection):
-                options.add_argument(argument)
-            for argument in browser_display_arguments(headless):
-                options.add_argument(argument)
-            service_type = ChromeService if name == "chrome" else EdgeService
-            service_options = {"log_output": subprocess.DEVNULL}
-            bundled_driver = None
-            if name == "chrome" and bundled and binary and Path(binary).resolve() == Path(bundled[0]).resolve():
-                bundled_driver = bundled[1]
-                service_options["executable_path"] = bundled_driver
-            if os.name == "nt":
-                service_options["popen_kw"] = {"creation_flags": subprocess.CREATE_NO_WINDOW}
-            service = None
-            if bundled_driver:
-                self.emit("info", "正在启动 Release 内置 Chrome，无需联网下载浏览器或驱动")
-            else:
-                managed = "浏览器和驱动" if binary is None else "驱动"
-                self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备{managed}")
-            try:
-                service = service_type(**service_options)
-                constructor = webdriver.Chrome if name == "chrome" else webdriver.Edge
-                self.driver = constructor(options=options, service=service)
-                self.browser = name
-                self.direct_connection = direct_connection
-                self.driver.set_page_load_timeout(30)
-                self.driver.set_script_timeout(15)
-                # A manually opened viewer is a general-purpose browser. Keep
-                # its initial page neutral; collection methods navigate to XHS
-                # explicitly when an automation job takes ownership.
-                self.driver.get("about:blank")
-                self._known_handles = set(self.driver.window_handles)
-                from .remote_browser import RemoteBrowserTransport
-                address = debugger_address_from_capabilities(self.driver.capabilities, name)
-                transport = RemoteBrowserTransport(address, self.driver.current_window_handle, self.emit)
+            persistent_profile = self.project_dir / "runtime" / "profiles" / name
+            is_bundled = bool(name == "chrome" and bundled and binary
+                              and Path(binary).resolve() == Path(bundled[0]).resolve())
+            attempts = [(persistent_profile, False)]
+            if is_bundled:
+                attempts.append((persistent_profile.parent / "chrome-compat", True))
+            for profile, recovery in attempts:
+                profile.mkdir(parents=True, exist_ok=True)
+                options = webdriver.ChromeOptions() if name == "chrome" else webdriver.EdgeOptions()
+                options.page_load_strategy = "eager"
+                configure_browser_binary(options, binary)
+                options.add_argument(f"--user-data-dir={profile}")
+                options.add_argument("--window-size=1365,900")
+                options.add_argument("--no-first-run")
+                options.add_argument("--no-default-browser-check")
+                for argument in browser_connection_arguments(direct_connection):
+                    options.add_argument(argument)
+                for argument in browser_display_arguments(headless):
+                    options.add_argument(argument)
+                for argument in browser_recovery_arguments(recovery):
+                    options.add_argument(argument)
+                service_type = ChromeService if name == "chrome" else EdgeService
+                log_dir = self.project_dir / "runtime" / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                suffix = "-compat" if recovery else ""
+                driver_log = log_dir / f"{name}{suffix}-driver.log"
+                service_options = {"log_output": str(driver_log), "service_args": ["--verbose"]}
+                if is_bundled:
+                    service_options["executable_path"] = bundled[1]
+                if os.name == "nt":
+                    service_options["popen_kw"] = {"creation_flags": subprocess.CREATE_NO_WINDOW}
+                service = None
+                if recovery:
+                    self.emit("warning", "内置 Chrome 标准启动失败，正在使用干净配置与软件渲染重试")
+                elif is_bundled:
+                    self.emit("info", "正在启动 Release 内置 Chrome，无需联网下载浏览器或驱动")
+                else:
+                    managed = "浏览器和驱动" if binary is None else "驱动"
+                    self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备{managed}")
                 try:
-                    transport.start()
-                    if not transport.wait_until_ready(timeout=12):
-                        detail = transport.snapshot().get("error") or "等待首帧超时"
-                        raise RuntimeError(f"{name.title()} 实时画面连接失败：{detail}")
-                except Exception:
-                    transport.close()
-                    raise
-                self.remote = transport
-                network = "直连网络（已忽略系统 HTTP/HTTPS 代理）" if direct_connection else "跟随系统代理"
-                self.emit("success", f"{name.title()} 已启动，当前使用{network}；登录状态保存在独立配置目录")
-                return
-            except Exception as exc:
-                remote, self.remote = self.remote, None
-                if remote is not None:
-                    remote.close()
-                driver, self.driver = self.driver, None
-                if driver is not None:
+                    service = service_type(**service_options)
+                    constructor = webdriver.Chrome if name == "chrome" else webdriver.Edge
+                    self.driver = constructor(options=options, service=service)
+                    self.browser = name
+                    self.direct_connection = direct_connection
+                    self.driver.set_page_load_timeout(30)
+                    self.driver.set_script_timeout(15)
+                    # A manually opened viewer is a general-purpose browser. Keep
+                    # its initial page neutral; collection methods navigate to XHS
+                    # explicitly when an automation job takes ownership.
+                    self.driver.get("about:blank")
+                    self._known_handles = set(self.driver.window_handles)
+                    from .remote_browser import RemoteBrowserTransport
+                    address = debugger_address_from_capabilities(self.driver.capabilities, name)
+                    transport = RemoteBrowserTransport(address, self.driver.current_window_handle, self.emit)
                     try:
-                        driver.quit()
+                        transport.start()
+                        if not transport.wait_until_ready(timeout=12):
+                            detail = transport.snapshot().get("error") or "等待首帧超时"
+                            raise RuntimeError(f"{name.title()} 实时画面连接失败：{detail}")
                     except Exception:
-                        pass
-                stop_service_safely(service)
-                detail = str(exc).splitlines()[0].strip() or type(exc).__name__
-                errors.append(f"{name}: {detail}")
-                self.emit("warning", f"{name.title()} 未能建立可操作的实时画面，正在尝试备用浏览器")
+                        transport.close()
+                        raise
+                    self.remote = transport
+                    network = "直连网络（已忽略系统 HTTP/HTTPS 代理）" if direct_connection else "跟随系统代理"
+                    mode = "（服务器兼容模式）" if recovery else ""
+                    self.emit("success", f"{name.title()} 已启动{mode}，当前使用{network}；登录状态保存在独立配置目录")
+                    return
+                except Exception as exc:
+                    remote, self.remote = self.remote, None
+                    if remote is not None:
+                        remote.close()
+                    driver, self.driver = self.driver, None
+                    if driver is not None:
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
+                    stop_service_safely(service)
+                    detail = str(exc).splitlines()[0].strip() or type(exc).__name__
+                    label = f"{name}-compat" if recovery else name
+                    errors.append(f"{label}: {detail}（驱动日志：{driver_log}）")
+                    if not recovery:
+                        self.emit("warning", f"{name.title()} 未能建立可操作的实时画面，正在尝试备用启动方式")
+        platform_problem = unsupported_windows_message()
+        platform_hint = f"{platform_problem}。" if platform_problem else ""
         raise RuntimeError(
             "无法启动浏览器。免安装 Release 会优先使用内置的匹配版 Chrome；源码运行会尝试本机浏览器和联网备用浏览器。"
-            "请检查网络、写入权限，并确认没有其他工作台占用同一浏览器配置。详情：" + "；".join(errors)
+            + platform_hint + "请确认压缩包已完整解压，并检查运行目录、杀毒软件及是否有其他工作台占用浏览器配置。详情："
+            + "；".join(errors)
         )
 
     def close(self) -> None:
