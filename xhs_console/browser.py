@@ -190,6 +190,26 @@ def browser_display_arguments(embedded_only: bool) -> tuple[str, ...]:
     )
 
 
+def configure_browser_binary(options, binary: str | None) -> None:
+    """Use an installed browser or let Selenium manage stable Chrome/Edge."""
+    if binary:
+        options.binary_location = binary
+    else:
+        options.browser_version = "stable"
+
+
+def stop_service_safely(service) -> None:
+    """Never let cleanup hide the browser's original startup exception."""
+    if service is None:
+        return
+    try:
+        service.stop()
+    except Exception:
+        # Selenium's Service may not create ``process`` when driver discovery,
+        # download, permissions, or process creation fails before start().
+        pass
+
+
 ACCESS_SCRIPT = r"""
 const visible = el => !!el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
 const firstVisible = selector => Array.from(document.querySelectorAll(selector)).find(visible);
@@ -240,14 +260,18 @@ class BrowserSession:
         from selenium.webdriver.chrome.service import Service as ChromeService
         from selenium.webdriver.edge.service import Service as EdgeService
 
+        manager_cache = self.project_dir / "runtime" / "selenium"
+        manager_cache.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("SE_CACHE_PATH", str(manager_cache))
+        os.environ.setdefault("SE_AVOID_STATS", "true")
+
         errors = []
         for name, binary in browser_candidates(browser):
             profile = self.project_dir / "runtime" / "profiles" / name
             profile.mkdir(parents=True, exist_ok=True)
             options = webdriver.ChromeOptions() if name == "chrome" else webdriver.EdgeOptions()
             options.page_load_strategy = "eager"
-            if binary:
-                options.binary_location = binary
+            configure_browser_binary(options, binary)
             options.add_argument(f"--user-data-dir={profile}")
             options.add_argument("--window-size=1365,900")
             options.add_argument("--no-first-run")
@@ -260,9 +284,11 @@ class BrowserSession:
             service_options = {"log_output": subprocess.DEVNULL}
             if os.name == "nt":
                 service_options["popen_kw"] = {"creation_flags": subprocess.CREATE_NO_WINDOW}
-            service = service_type(**service_options)
-            self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备驱动")
+            service = None
+            managed = "浏览器和驱动" if binary is None else "驱动"
+            self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备{managed}")
             try:
+                service = service_type(**service_options)
                 constructor = webdriver.Chrome if name == "chrome" else webdriver.Edge
                 self.driver = constructor(options=options, service=service)
                 self.browser = name
@@ -286,9 +312,14 @@ class BrowserSession:
                 self.emit("success", f"{name.title()} 已启动，当前使用{network}；登录状态保存在独立配置目录")
                 return
             except Exception as exc:
-                service.stop()
-                errors.append(f"{name}: {str(exc).splitlines()[0]}")
-        raise RuntimeError("无法启动浏览器。请确认已安装 Chrome 或 Edge，且未同时打开本项目的浏览器配置。" + "；".join(errors))
+                stop_service_safely(service)
+                self.driver = None
+                detail = str(exc).splitlines()[0].strip() or type(exc).__name__
+                errors.append(f"{name}: {detail}")
+        raise RuntimeError(
+            "无法启动浏览器。程序会优先使用本机 Chrome/Edge；未安装时会联网准备稳定版 Chrome。"
+            "请检查网络、写入权限，并确认没有其他工作台占用同一浏览器配置。详情：" + "；".join(errors)
+        )
 
     def close(self) -> None:
         remote, self.remote = self.remote, None

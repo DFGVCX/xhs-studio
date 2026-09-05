@@ -10,12 +10,26 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_connection_arguments,
-                                 browser_display_arguments,
+                                 browser_display_arguments, configure_browser_binary,
                                  deduplicate_note_urls, normalize_note, normalize_note_url,
-                                 normalize_xhs_url, validate_navigation_url)
+                                 normalize_xhs_url, stop_service_safely, validate_navigation_url)
 
 
 class BrowserNormalizationTests(unittest.TestCase):
+    def test_missing_browser_uses_managed_stable_version(self):
+        options = SimpleNamespace(binary_location=None, browser_version=None)
+        configure_browser_binary(options, None)
+        self.assertEqual(options.browser_version, "stable")
+        configure_browser_binary(options, "C:/Browser/browser.exe")
+        self.assertEqual(options.binary_location, "C:/Browser/browser.exe")
+
+    def test_incomplete_service_cleanup_never_masks_startup_error(self):
+        class IncompleteService:
+            def stop(self):
+                raise AttributeError("'Service' object has no attribute 'process'")
+
+        stop_service_safely(IncompleteService())
+
     def test_direct_connection_explicitly_bypasses_browser_proxy(self):
         self.assertEqual(browser_connection_arguments(True), ("--no-proxy-server", "--proxy-bypass-list=*"))
         self.assertEqual(browser_connection_arguments(False), ())
