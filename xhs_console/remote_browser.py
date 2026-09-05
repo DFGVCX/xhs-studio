@@ -152,6 +152,20 @@ class RemoteBrowserTransport:
             self._thread = threading.Thread(target=self._run, name="xhs-browser-stream", daemon=True)
             self._thread.start()
 
+    def wait_until_ready(self, timeout: float = 12) -> bool:
+        """Wait until the first usable frame arrives or the deadline expires."""
+        deadline = time.monotonic() + max(0, timeout)
+        while time.monotonic() < deadline and not self._stop.is_set():
+            with self._lock:
+                if self._connected and self._data:
+                    return True
+                thread = self._thread
+            if thread is not None and not thread.is_alive():
+                return False
+            self._stop.wait(.05)
+        with self._lock:
+            return bool(self._connected and self._data)
+
     def attach(self, target_id: str) -> None:
         """Called by Selenium's owner after a new tab becomes active."""
         target_id = str(target_id).removeprefix("CDwindow-")
@@ -428,16 +442,18 @@ class RemoteBrowserTransport:
             "deviceScaleFactor": 2 if quality == "high" else 1, "mobile": False}, track=True)
 
     def _maybe_capture(self) -> None:
-        if (self._quality != "high" or not self._metrics_ready or not self._compositor_ready
+        if (self._quality != "high" or not self._metrics_ready
                 or self._capture_id is not None or self._input_sync_id is not None
                 or time.monotonic() < self._next_capture_at):
             return
         with self._lock:
             if self._actions:
                 return  # Inputs and viewport changes take priority over a frame.
-        # startScreencast can output only CSS-resolution frames on Windows even
-        # with DPR=2. Capture the compositor surface natively on this same CDP
-        # session: 1920x1200 CSS becomes at most 3840x2400 real image pixels.
+        # startScreencast can output only CSS-resolution frames on Windows and
+        # some Edge builds do not emit its first event for an initial blank page.
+        # Capture directly as soon as metrics are ready; the command safely
+        # retries with the transport if the compositor surface is still cold.
+        # 1920x1200 CSS becomes at most 3840x2400 real image pixels.
         # Never scale an existing screenshot, and keep only one capture in flight.
         self._capture_generation = self._generation
         self._capture_started_at = time.monotonic()

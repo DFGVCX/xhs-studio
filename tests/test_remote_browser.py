@@ -121,6 +121,12 @@ class RemoteBrowserProtocolTests(unittest.TestCase):
         self.assertIsNone(self.remote.snapshot()["data"])
         self.assertEqual(self.remote._ws.sent[-1]["method"], "Page.screencastFrameAck")
 
+    def test_high_mode_captures_before_edge_emits_a_screencast_frame(self):
+        self.remote._metrics_ready = True
+        self.remote._compositor_ready = False
+        self.remote._maybe_capture()
+        self.assertEqual(self.remote._ws.sent[-1]["method"], "Page.captureScreenshot")
+
     def test_resize_uses_css_dimensions_for_pointer_even_when_metadata_is_physical(self):
         self.remote._execute(normalize_action({"type": "resize", "width": 1100, "height": 640, "quality": "smooth"}))
         self.remote._receive({"id": self.remote._metrics_id, "result": {}})

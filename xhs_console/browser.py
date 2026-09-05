@@ -222,6 +222,17 @@ def configure_browser_binary(options, binary: str | None) -> None:
         options.browser_version = "stable"
 
 
+def debugger_address_from_capabilities(capabilities: dict, browser: str) -> str:
+    """Read the local DevTools endpoint from Chrome or Edge capabilities."""
+    keys = ("ms:edgeOptions", "goog:chromeOptions") if browser == "edge" else ("goog:chromeOptions", "ms:edgeOptions")
+    for key in keys:
+        options = capabilities.get(key)
+        address = options.get("debuggerAddress") if isinstance(options, dict) else None
+        if isinstance(address, str) and address.strip():
+            return address.strip()
+    raise RuntimeError(f"{browser.title()} 未提供实时画面所需的本机调试地址")
+
+
 def stop_service_safely(service) -> None:
     """Never let cleanup hide the browser's original startup exception."""
     if service is None:
@@ -332,22 +343,35 @@ class BrowserSession:
                 # explicitly when an automation job takes ownership.
                 self.driver.get("about:blank")
                 self._known_handles = set(self.driver.window_handles)
+                from .remote_browser import RemoteBrowserTransport
+                address = debugger_address_from_capabilities(self.driver.capabilities, name)
+                transport = RemoteBrowserTransport(address, self.driver.current_window_handle, self.emit)
                 try:
-                    from .remote_browser import RemoteBrowserTransport
-                    capabilities = self.driver.capabilities
-                    debugging = capabilities.get("goog:chromeOptions") or capabilities.get("ms:edgeOptions") or {}
-                    self.remote = RemoteBrowserTransport(debugging["debuggerAddress"], self.driver.current_window_handle, self.emit)
-                    self.remote.start()
-                except Exception as exc:
-                    self.emit("warning", f"实时交互画面暂不可用（{type(exc).__name__}），仍可查看浏览器截图")
+                    transport.start()
+                    if not transport.wait_until_ready(timeout=12):
+                        detail = transport.snapshot().get("error") or "等待首帧超时"
+                        raise RuntimeError(f"{name.title()} 实时画面连接失败：{detail}")
+                except Exception:
+                    transport.close()
+                    raise
+                self.remote = transport
                 network = "直连网络（已忽略系统 HTTP/HTTPS 代理）" if direct_connection else "跟随系统代理"
                 self.emit("success", f"{name.title()} 已启动，当前使用{network}；登录状态保存在独立配置目录")
                 return
             except Exception as exc:
+                remote, self.remote = self.remote, None
+                if remote is not None:
+                    remote.close()
+                driver, self.driver = self.driver, None
+                if driver is not None:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
                 stop_service_safely(service)
-                self.driver = None
                 detail = str(exc).splitlines()[0].strip() or type(exc).__name__
                 errors.append(f"{name}: {detail}")
+                self.emit("warning", f"{name.title()} 未能建立可操作的实时画面，正在尝试备用浏览器")
         raise RuntimeError(
             "无法启动浏览器。免安装 Release 会优先使用内置的匹配版 Chrome；源码运行会尝试本机浏览器和联网备用浏览器。"
             "请检查网络、写入权限，并确认没有其他工作台占用同一浏览器配置。详情：" + "；".join(errors)

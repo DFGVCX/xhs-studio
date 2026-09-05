@@ -11,12 +11,22 @@ from urllib.parse import quote
 
 from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_candidates,
                                  browser_connection_arguments, browser_display_arguments, bundled_chrome_paths,
-                                 configure_browser_binary,
+                                 configure_browser_binary, debugger_address_from_capabilities,
                                  deduplicate_note_urls, normalize_note, normalize_note_url,
                                  normalize_xhs_url, stop_service_safely, validate_navigation_url)
 
 
 class BrowserNormalizationTests(unittest.TestCase):
+    def test_debugger_address_prefers_the_selected_browser_namespace(self):
+        capabilities = {
+            "goog:chromeOptions": {"debuggerAddress": "127.0.0.1:9001"},
+            "ms:edgeOptions": {"debuggerAddress": "127.0.0.1:9002"},
+        }
+        self.assertEqual(debugger_address_from_capabilities(capabilities, "chrome"), "127.0.0.1:9001")
+        self.assertEqual(debugger_address_from_capabilities(capabilities, "edge"), "127.0.0.1:9002")
+        with self.assertRaisesRegex(RuntimeError, "未提供实时画面"):
+            debugger_address_from_capabilities({}, "edge")
+
     def test_release_bundle_is_first_and_contains_a_matched_driver(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root).resolve()
@@ -134,6 +144,77 @@ class BrowserNormalizationTests(unittest.TestCase):
 
 
 class BrowserPauseTests(unittest.TestCase):
+    def test_edge_without_live_frame_is_closed_and_falls_back_to_bundled_chrome(self):
+        class FakeService:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def stop(self):
+                pass
+
+        class FakeDriver:
+            def __init__(self, name, port):
+                self.name = name
+                self.capabilities = {
+                    ("ms:edgeOptions" if name == "edge" else "goog:chromeOptions"):
+                    {"debuggerAddress": f"127.0.0.1:{port}"}
+                }
+                self.current_window_handle = f"CDwindow-{name}"
+                self.window_handles = [self.current_window_handle]
+                self.quit_called = False
+
+            def set_page_load_timeout(self, _seconds):
+                pass
+
+            def set_script_timeout(self, _seconds):
+                pass
+
+            def get(self, _url):
+                pass
+
+            def quit(self):
+                self.quit_called = True
+
+        class FakeTransport:
+            def __init__(self, address, *_args):
+                self.ready = address.endswith(":9001")
+                self.closed = False
+
+            def start(self):
+                pass
+
+            def wait_until_ready(self, timeout):
+                self.timeout = timeout
+                return self.ready
+
+            def snapshot(self):
+                return {"error": None}
+
+            def close(self):
+                self.closed = True
+
+        edge_driver = FakeDriver("edge", 9002)
+        chrome_driver = FakeDriver("chrome", 9001)
+        events = []
+        with tempfile.TemporaryDirectory() as root:
+            chrome = Path(root) / "chrome.exe"
+            driver = Path(root) / "chromedriver.exe"
+            chrome.touch()
+            driver.touch()
+            session = BrowserSession(Path(root), lambda level, message: events.append((level, message)), lambda *_: None)
+            with (patch("xhs_console.browser.browser_candidates", return_value=[("edge", str(chrome)), ("chrome", str(chrome))]),
+                  patch("xhs_console.browser.bundled_chrome_paths", return_value=(str(chrome), str(driver))),
+                  patch("selenium.webdriver.Edge", return_value=edge_driver),
+                  patch("selenium.webdriver.Chrome", return_value=chrome_driver),
+                  patch("selenium.webdriver.edge.service.Service", FakeService),
+                  patch("selenium.webdriver.chrome.service.Service", FakeService),
+                  patch("xhs_console.remote_browser.RemoteBrowserTransport", FakeTransport)):
+                session.open(headless=True, browser="edge")
+        self.assertTrue(edge_driver.quit_called)
+        self.assertIs(session.driver, chrome_driver)
+        self.assertEqual(session.browser, "chrome")
+        self.assertTrue(any(level == "warning" and "备用浏览器" in message for level, message in events))
+
     def test_collection_opens_home_and_waits_without_login_cookie(self):
         visited = []
 
