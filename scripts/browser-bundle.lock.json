@@ -1,0 +1,12 @@
+{
+  "version": "152.0.7977.82",
+  "platform": "win64",
+  "chrome": {
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.82/win64/chrome-win64.zip",
+    "sha256": "460016c1ddba882bf253445175ab240dd947fa349bd720daeb0e311c17e74540"
+  },
+  "chromedriver": {
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.82/win64/chromedriver-win64.zip",
+    "sha256": "c315f5671a36210c00024dbd3ba68500b2fe368350fa28aacdcd23772420a438"
+  }
+}

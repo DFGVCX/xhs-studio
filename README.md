@@ -15,7 +15,7 @@
 3. 双击 `XHS-Studio.exe`。工作台会自动打开 `http://127.0.0.1:8765`。
 4. 保持启动窗口开启；关闭该窗口即退出工作台。
 
-电脑需要 Windows 10 / 11 64 位系统并允许程序联网。工作台优先使用已安装的 Chrome 或 Edge；如果服务器没有浏览器，会由 Selenium Manager 自动下载并缓存稳定版 Chrome，首次打开可能等待约 1–3 分钟，请预留约 1 GB 磁盘空间。应用没有购买代码签名证书，Windows 首次运行可能显示 SmartScreen 提示；请只从本仓库 Release 下载，并用同页提供的 SHA256 文件校验压缩包。
+电脑只需 Windows 10 / 11 64 位系统。Release 已自带版本匹配的 Chrome for Testing 与 ChromeDriver，打开页内浏览器不依赖服务器上已安装的 Chrome / Edge，也不需要临时下载驱动。浏览网页和采集内容本身仍需联网。应用没有购买代码签名证书，Windows 首次运行可能显示 SmartScreen 提示；请只从本仓库 Release 下载，并用同页提供的 SHA256 文件校验压缩包。
 
 ## 第一次使用
 
@@ -47,7 +47,7 @@
 
 ### 提示没有找到 Chrome 或 Edge
 
-通常无需手动安装。程序会先识别本机 Chrome / Edge，没有找到时自动下载稳定版 Chrome 及匹配驱动，并缓存到 `runtime/selenium/`。若仍失败，请确认服务器能访问浏览器下载站点、程序目录可写，并查看运行状态中的完整错误详情。
+请确认下载的是最新版 Release，并且已将 ZIP **完整解压**。Release 会优先启动压缩包内版本匹配的 Chrome 与 ChromeDriver，不要求服务器另装浏览器。若仍失败，请确认解压目录中的 `_internal/browser/chrome-win64/chrome.exe` 和 `_internal/browser/chromedriver-win64/chromedriver.exe` 没有被安全软件隔离，并查看运行状态中的完整错误详情。源码运行模式仍会依次尝试本机 Chrome、Edge 及 Selenium Manager 的联网备用浏览器。
 
 ### 小红书提示“安全限制 / IP 存在风险 / 300012”
 
@@ -105,7 +105,7 @@ node --test tests/browser_viewer_protocol.test.cjs
 .\scripts\build_release.ps1
 ```
 
-产物位于 `dist/XHS-Studio-Windows-x64-版本号.zip`。推送 `v*` 标签后，GitHub Actions 会在 Windows 环境重新构建、生成 SHA256，并发布 Release。
+产物位于 `dist/XHS-Studio-Windows-x64-版本号.zip`。构建脚本会按 `scripts/browser-bundle.lock.json` 下载并校验固定版本的 Chrome for Testing 与 ChromeDriver，然后一并打包。推送 `v*` 标签后，GitHub Actions 会在 Windows 环境重新构建、生成 SHA256，并发布 Release。
 
 ## 数据与安全边界
 
@@ -119,4 +119,4 @@ node --test tests/browser_viewer_protocol.test.cjs
 
 ## 开源许可
 
-项目代码使用 [MIT License](LICENSE)。界面字体来自站酷快乐体和霞鹜文楷，字体来源与对应许可位于 `static/fonts/`。
+项目代码使用 [MIT License](LICENSE)。界面字体来自站酷快乐体和霞鹜文楷，字体来源与对应许可位于 `static/fonts/`。Windows Release 还包含用于自动化的 [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 与 ChromeDriver；具体版本记录在压缩包的 `BUNDLED_BROWSER.txt`。

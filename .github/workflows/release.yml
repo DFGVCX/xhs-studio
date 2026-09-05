@@ -11,7 +11,7 @@ permissions:
 jobs:
   windows-portable:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,7 +32,7 @@ jobs:
           body: |
             Windows 免安装便携版。下载 ZIP 后完整解压，双击 `XHS-Studio.exe` 即可启动。
 
-            运行环境：Windows 10/11 x64，电脑已安装 Chrome 或 Edge。首次打开小红书时需要用户自行登录。
+            运行环境：Windows 10/11 x64。压缩包已包含匹配的 Chrome for Testing 与 ChromeDriver，打开页内浏览器不需要另装浏览器或驱动。首次打开小红书时需要用户自行登录。
           files: |
             dist/XHS-Studio-Windows-x64-*.zip
             dist/XHS-Studio-Windows-x64-*.zip.sha256

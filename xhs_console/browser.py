@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -139,13 +140,29 @@ def normalize_note(raw: dict, url: str) -> dict:
     return result
 
 
-def browser_candidates(preference: str = "auto") -> list[tuple[str, str | None]]:
-    """Discover system and per-user Chrome/Edge without using personal profiles."""
+def bundled_chrome_paths(resource_root: Path | None = None) -> tuple[str, str] | None:
+    """Return the release's matched Chrome/ChromeDriver pair when available."""
+    if resource_root is None:
+        root = Path(sys._MEIPASS).resolve() if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+    else:
+        root = Path(resource_root).resolve()
+    browser = root / "browser" / "chrome-win64" / "chrome.exe"
+    driver = root / "browser" / "chromedriver-win64" / "chromedriver.exe"
+    if browser.is_file() and driver.is_file():
+        return str(browser), str(driver)
+    return None
+
+
+def browser_candidates(preference: str = "auto", resource_root: Path | None = None) -> list[tuple[str, str | None]]:
+    """Discover bundled/system browsers and retain managed-browser fallbacks."""
     if preference not in ("auto", "chrome", "edge"):
         raise ValueError("浏览器必须为 auto、chrome 或 edge")
     roots = [os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")]
     names = ("chrome", "edge") if preference == "auto" else (preference,)
     candidates = []
+    bundled = bundled_chrome_paths(resource_root)
+    if bundled and preference in ("auto", "chrome"):
+        candidates.append(("chrome", bundled[0]))
     for name in names:
         executable = "chrome.exe" if name == "chrome" else "msedge.exe"
         relative = "Google/Chrome/Application/chrome.exe" if name == "chrome" else "Microsoft/Edge/Application/msedge.exe"
@@ -154,11 +171,18 @@ def browser_candidates(preference: str = "auto") -> list[tuple[str, str | None]]
         if on_path:
             known.insert(0, on_path)
         found = next((path for path in known if Path(path).is_file()), None)
-        if found:
+        if found and not any(candidate_name == name and Path(candidate_path or "") == Path(found) for candidate_name, candidate_path in candidates):
             candidates.append((name, found))
-    if not candidates:
-        # Selenium Manager also knows platform-specific installation paths.
-        candidates = [(name, None) for name in names]
+    if bundled and preference == "edge":
+        # Treat the explicit engine as a preference, not a reason to make the
+        # portable release unusable when that machine's Edge driver is blocked.
+        candidates.append(("chrome", bundled[0]))
+    # A discovered browser can still fail when its matching driver is unavailable.
+    # Keep an independently managed fallback for every missing engine instead of
+    # stopping after the first installed browser (the former Edge-only failure).
+    for name in names:
+        if not any(candidate_name == name for candidate_name, _ in candidates):
+            candidates.append((name, None))
     return candidates
 
 
@@ -266,6 +290,7 @@ class BrowserSession:
         os.environ.setdefault("SE_AVOID_STATS", "true")
 
         errors = []
+        bundled = bundled_chrome_paths()
         for name, binary in browser_candidates(browser):
             profile = self.project_dir / "runtime" / "profiles" / name
             profile.mkdir(parents=True, exist_ok=True)
@@ -282,11 +307,18 @@ class BrowserSession:
                 options.add_argument(argument)
             service_type = ChromeService if name == "chrome" else EdgeService
             service_options = {"log_output": subprocess.DEVNULL}
+            bundled_driver = None
+            if name == "chrome" and bundled and binary and Path(binary).resolve() == Path(bundled[0]).resolve():
+                bundled_driver = bundled[1]
+                service_options["executable_path"] = bundled_driver
             if os.name == "nt":
                 service_options["popen_kw"] = {"creation_flags": subprocess.CREATE_NO_WINDOW}
             service = None
-            managed = "浏览器和驱动" if binary is None else "驱动"
-            self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备{managed}")
+            if bundled_driver:
+                self.emit("info", "正在启动 Release 内置 Chrome，无需联网下载浏览器或驱动")
+            else:
+                managed = "浏览器和驱动" if binary is None else "驱动"
+                self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备{managed}")
             try:
                 service = service_type(**service_options)
                 constructor = webdriver.Chrome if name == "chrome" else webdriver.Edge
@@ -317,7 +349,7 @@ class BrowserSession:
                 detail = str(exc).splitlines()[0].strip() or type(exc).__name__
                 errors.append(f"{name}: {detail}")
         raise RuntimeError(
-            "无法启动浏览器。程序会优先使用本机 Chrome/Edge；未安装时会联网准备稳定版 Chrome。"
+            "无法启动浏览器。免安装 Release 会优先使用内置的匹配版 Chrome；源码运行会尝试本机浏览器和联网备用浏览器。"
             "请检查网络、写入权限，并确认没有其他工作台占用同一浏览器配置。详情：" + "；".join(errors)
         )
 

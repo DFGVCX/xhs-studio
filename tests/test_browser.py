@@ -9,13 +9,36 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
 
-from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_connection_arguments,
-                                 browser_display_arguments, configure_browser_binary,
+from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_candidates,
+                                 browser_connection_arguments, browser_display_arguments, bundled_chrome_paths,
+                                 configure_browser_binary,
                                  deduplicate_note_urls, normalize_note, normalize_note_url,
                                  normalize_xhs_url, stop_service_safely, validate_navigation_url)
 
 
 class BrowserNormalizationTests(unittest.TestCase):
+    def test_release_bundle_is_first_and_contains_a_matched_driver(self):
+        with tempfile.TemporaryDirectory() as root:
+            browser = Path(root) / "browser" / "chrome-win64" / "chrome.exe"
+            driver = Path(root) / "browser" / "chromedriver-win64" / "chromedriver.exe"
+            browser.parent.mkdir(parents=True)
+            driver.parent.mkdir(parents=True)
+            browser.touch()
+            driver.touch()
+            self.assertEqual(bundled_chrome_paths(Path(root)), (str(browser), str(driver)))
+            self.assertEqual(browser_candidates("auto", Path(root))[0], ("chrome", str(browser)))
+            self.assertIn(("chrome", str(browser)), browser_candidates("edge", Path(root)))
+
+    def test_installed_edge_failure_retains_managed_chrome_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            edge = Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            edge.parent.mkdir(parents=True)
+            edge.touch()
+            environment = {"PROGRAMFILES": root, "PROGRAMFILES(X86)": "", "LOCALAPPDATA": ""}
+            with patch.dict(os.environ, environment), patch("xhs_console.browser.shutil.which", return_value=None):
+                candidates = browser_candidates("auto", Path(root) / "without-bundle")
+            self.assertEqual(candidates, [("edge", str(edge)), ("chrome", None)])
+
     def test_missing_browser_uses_managed_stable_version(self):
         options = SimpleNamespace(binary_location=None, browser_version=None)
         configure_browser_binary(options, None)
