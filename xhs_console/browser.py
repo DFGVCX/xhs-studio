@@ -172,6 +172,24 @@ def browser_connection_arguments(direct_connection: bool) -> tuple[str, ...]:
     return ("--no-proxy-server", "--proxy-bypass-list=*") if direct_connection else ()
 
 
+def browser_display_arguments(embedded_only: bool) -> tuple[str, ...]:
+    """Keep an ordinary Chromium renderer off-screen for the embedded viewer.
+
+    Xiaohongshu currently restricts Chromium's native headless mode even when
+    the same clean profile and network work in a normal window. The embedded
+    viewer therefore streams a regular, off-screen window instead of enabling
+    ``--headless``. Background-throttling flags keep CDP frames responsive.
+    """
+    if not embedded_only:
+        return ()
+    return (
+        "--window-position=-32000,-32000",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-features=CalculateNativeWinOcclusion",
+    )
+
+
 ACCESS_SCRIPT = r"""
 const visible = el => !!el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
 const firstVisible = selector => Array.from(document.querySelectorAll(selector)).find(visible);
@@ -236,8 +254,8 @@ class BrowserSession:
             options.add_argument("--no-default-browser-check")
             for argument in browser_connection_arguments(direct_connection):
                 options.add_argument(argument)
-            if headless:
-                options.add_argument("--headless=new")
+            for argument in browser_display_arguments(headless):
+                options.add_argument(argument)
             service_type = ChromeService if name == "chrome" else EdgeService
             service_options = {"log_output": subprocess.DEVNULL}
             if os.name == "nt":

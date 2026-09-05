@@ -10,6 +10,7 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_connection_arguments,
+                                 browser_display_arguments,
                                  deduplicate_note_urls, normalize_note, normalize_note_url,
                                  normalize_xhs_url, validate_navigation_url)
 
@@ -18,6 +19,12 @@ class BrowserNormalizationTests(unittest.TestCase):
     def test_direct_connection_explicitly_bypasses_browser_proxy(self):
         self.assertEqual(browser_connection_arguments(True), ("--no-proxy-server", "--proxy-bypass-list=*"))
         self.assertEqual(browser_connection_arguments(False), ())
+
+    def test_embedded_display_uses_offscreen_window_not_headless_mode(self):
+        arguments = browser_display_arguments(True)
+        self.assertIn("--window-position=-32000,-32000", arguments)
+        self.assertFalse(any(argument.startswith("--headless") for argument in arguments))
+        self.assertEqual(browser_display_arguments(False), ())
 
     def test_signed_href_replaces_unsigned_but_keeps_discovery_order(self):
         first = "674000000000000001001001"
