@@ -1,0 +1,46 @@
+name: Bug 报告
+description: 报告可复现的程序问题（请勿提交账号或采集数据）
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "请先删除截图、日志中的 Cookie、签名参数、个人内容与本机路径。"
+  - type: input
+    id: version
+    attributes:
+      label: 版本或提交
+      placeholder: commit SHA 或分支名
+    validations:
+      required: true
+  - type: dropdown
+    id: browser
+    attributes:
+      label: 浏览器
+      options:
+        - Microsoft Edge
+        - Google Chrome
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请提供最小、可重复的操作步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望与实际结果
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私检查
+      options:
+        - label: 我已确认内容不含 Cookie、令牌、签名链接、个人数据或采集结果。
+          required: true
+

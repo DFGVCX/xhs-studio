@@ -1,0 +1,6 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+selenium>=4.28,<5
+requests>=2.32.4,<3
+Pillow>=11.1,<13
+websocket-client>=1.8,<2

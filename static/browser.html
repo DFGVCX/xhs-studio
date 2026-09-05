@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>交互浏览器</title>
+  <link rel="stylesheet" href="/static/typography.css">
+  <link rel="stylesheet" href="/static/browser.css?v=3.2.2">
+  <script src="/static/browser.js?v=3.2.2" defer></script>
+</head>
+<body>
+  <main class="browser-shell" aria-label="可直接操作的交互浏览器">
+    <div class="tab-strip">
+      <div class="browser-tab"><span class="xhs-mark" aria-hidden="true">WEB</span><span id="page-title">交互浏览器</span></div>
+      <span class="tab-caption">自由浏览 · 自动采集默认 XHS</span>
+      <label class="quality-control" title="高清：2× 像素密度；流畅：1× 像素密度。采集运行时暂停后可调整。"><span>画质</span><select id="stream-quality" aria-label="浏览器画质"><option value="high" selected>高清</option><option value="smooth">流畅</option></select></label>
+      <span id="mode-badge" class="mode-badge">等待连接</span>
+    </div>
+    <form id="navigation" class="navigation" aria-label="浏览器导航">
+      <div class="nav-actions">
+        <button id="nav-back" class="icon-button" type="button" aria-label="后退" title="后退" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6M8 12h12"/></svg></button>
+        <button id="nav-forward" class="icon-button" type="button" aria-label="前进" title="前进" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6M16 12H4"/></svg></button>
+        <button id="nav-refresh" class="icon-button" type="button" aria-label="刷新页面" title="刷新页面" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M19.3 11a7.5 7.5 0 1 0-1.8 6.2M20 12l-2-5"/></svg></button>
+        <button id="nav-home" class="icon-button home-button" type="button" aria-label="打开小红书首页" title="小红书主页（采集默认）" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9"/></svg></button>
+      </div>
+      <label class="address-bar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v6c0 4 7 9 7 9s7-5 7-9V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg><input id="address" type="text" inputmode="url" spellcheck="false" autocomplete="off" aria-label="网页地址" placeholder="example.com" disabled><button class="address-go" type="submit" aria-label="前往地址" title="前往" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></label>
+    </form>
+    <div id="viewport" class="viewport">
+      <canvas id="browser-canvas" tabindex="0" aria-label="网页实时画面，点击后可直接输入、滚动或拖动" aria-disabled="true" hidden></canvas>
+      <textarea id="remote-input" class="remote-input" aria-label="浏览器页面输入，支持中文输入法" tabindex="-1" autocomplete="off" autocapitalize="off" spellcheck="false" rows="1"></textarea>
+      <div id="empty-state" class="empty-state">
+        <div class="empty-symbol" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="8" y="12" width="48" height="38" rx="7"/><path d="M8 23h48M16 18h1m5 0h1M28 31l12 7-12 7Z"/></svg><span></span></div>
+        <span class="eyebrow">YOUR LIVE WORKSPACE</span>
+        <h1 id="empty-title">网页，就在这里</h1>
+        <p id="empty-description">输入任意 HTTP/HTTPS 地址开始浏览<br>启动采集后会自动进入小红书</p>
+        <button id="open-browser" class="primary-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 10 7-10 7Z"/></svg><span>打开交互浏览器</span></button>
+      </div>
+      <div id="takeover" class="takeover" hidden><button id="takeover-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 14 9-7 1-3 7-4-17ZM13 14l4 6"/></svg><span>接管操作</span><small>暂停自动化，直接操作页面</small></button></div>
+      <div id="frame-notice" class="frame-notice" role="status" hidden><span class="notice-dot"></span><span id="frame-notice-text"></span></div>
+      <div id="viewer-toast" class="viewer-toast" role="status" hidden></div>
+    </div>
+    <footer class="browser-footer"><span class="connection"><span id="connection-dot" class="connection-dot"></span><span id="connection-label">正在连接画面</span></span><span id="interaction-hint">浏览器会嵌入显示在上方</span><span id="frame-size" class="frame-size"></span></footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,21 @@
+/* Self-hosted OFL fonts. Attribution and original licenses: ./fonts/SOURCES.md */
+@font-face {
+  font-family: "XHS Comic";
+  src: url("./fonts/zcool-kuaile-regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "XHS Hand";
+  src: url("./fonts/lxgw-wenkai-regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --font-display: "XHS Comic", "XHS Hand", "KaiTi", cursive;
+  --font-body: "XHS Hand", "KaiTi", "Microsoft YaHei", sans-serif;
+}
