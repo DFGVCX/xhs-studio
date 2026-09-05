@@ -55,10 +55,10 @@ class ConfigTests(unittest.TestCase):
     def test_output_directory_defaults_local_and_accepts_absolute_folder(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            self.assertEqual(resolve_output_root(root, Settings().output_dir), root / "Information")
+            self.assertEqual(resolve_output_root(root, Settings().output_dir), (root / "Information").resolve())
             custom = root / "custom output"
             configured = Settings(output_dir=str(custom))
-            self.assertEqual(resolve_output_root(root, configured.output_dir), custom)
+            self.assertEqual(resolve_output_root(root, configured.output_dir), custom.resolve())
             for invalid in ("../outside", "..\\outside", "\\\\server\\share", "//server/share", "~\\notes", "bad|name"):
                 with self.subTest(output_dir=invalid), self.assertRaises(ValidationError):
                     Settings(output_dir=invalid)
@@ -136,9 +136,9 @@ class StorageTests(unittest.TestCase):
     def test_custom_output_root_keeps_results_and_index_separate(self):
         custom = self.root / "chosen library"
         store = ResultStore(self.root, "自定义资料", str(custom))
-        self.assertEqual(store.output_root, custom)
-        self.assertEqual(store.directory, custom / "自定义资料" / "console")
-        self.assertTrue(store._path.is_relative_to(self.root / "runtime" / "collections" / "by-output"))
+        self.assertEqual(store.output_root, custom.resolve())
+        self.assertEqual(store.directory, (custom / "自定义资料" / "console").resolve())
+        self.assertTrue(store._path.is_relative_to((self.root / "runtime" / "collections" / "by-output").resolve()))
 
     def note(self, **updates):
         result = {"note_id": ID, "url": URL, "title": "一篇面经", "author": "作者", "content": "正文第一行\n正文第二行", "images": []}
