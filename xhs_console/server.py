@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,12 +17,26 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import __version__
 from .config import Settings, load_settings, resolve_output_root, save_settings
 from .browser import validate_navigation_url
 from .manager import JobManager
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
+def application_directories() -> tuple[Path, Path]:
+    """Return writable data and read-only bundled resource directories.
+
+    Source checkouts keep both below the repository. A PyInstaller build stores
+    bundled assets in ``_MEIPASS`` while user data must remain beside the exe so
+    that browser sessions and exports survive application upgrades.
+    """
+    source_root = Path(__file__).resolve().parents[1]
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent, Path(sys._MEIPASS).resolve()
+    return source_root, source_root
+
+
+PROJECT_DIR, RESOURCE_DIR = application_directories()
 
 
 class BrowserOptions(BaseModel):
@@ -144,8 +159,9 @@ class _ViewportBroker:
                 pass
 
 
-def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
+def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager, resource_dir=None):
     project_dir = Path(project_dir).resolve()
+    resource_dir = Path(resource_dir if resource_dir is not None else project_dir).resolve()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -154,7 +170,7 @@ def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
         yield
         app.state.manager.shutdown()
 
-    app = FastAPI(title="红薯工作台", version="3.1.0", lifespan=lifespan)
+    app = FastAPI(title="红薯工作台", version=__version__, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
 
     @app.middleware("http")
@@ -186,11 +202,11 @@ def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
 
     @app.get("/")
     def index():
-        return FileResponse(project_dir / "static" / "index.html")
+        return FileResponse(resource_dir / "static" / "index.html")
 
     @app.get("/browser")
     def browser_view():
-        return FileResponse(project_dir / "static" / "browser.html")
+        return FileResponse(resource_dir / "static" / "browser.html")
 
     @app.websocket("/api/browser/stream")
     async def browser_stream(socket: WebSocket):
@@ -340,8 +356,8 @@ def create_app(project_dir=PROJECT_DIR, manager_factory=JobManager):
         # Browser login profiles and source files are never served.
         return FileResponse(path, filename=path.name)
 
-    app.mount("/static", StaticFiles(directory=project_dir / "static", check_dir=False), name="static")
+    app.mount("/static", StaticFiles(directory=resource_dir / "static", check_dir=False), name="static")
     return app
 
 
-app = create_app()
+app = create_app(resource_dir=RESOURCE_DIR)

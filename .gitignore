@@ -9,6 +9,9 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+build/
+dist/
+*.spec.bak
 
 # Local secrets and machine-specific settings
 .env
@@ -28,4 +31,3 @@ Information/
 .DS_Store
 Thumbs.db
 desktop.ini
-
