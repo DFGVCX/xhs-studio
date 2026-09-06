@@ -15,10 +15,12 @@ from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, bro
                                  browser_crash_summary,
                                  browser_connection_arguments, browser_display_arguments, browser_native_headless_arguments,
                                  browser_recovery_arguments,
-                                 bundled_chrome_paths,
+                                 bundled_chrome_paths, bundled_chrome_version, bundled_driver_for_chrome,
+                                 chrome_versions_share_build,
                                  configure_browser_binary, debugger_address_from_capabilities,
                                  deduplicate_note_urls, ensure_loopback_no_proxy, normalize_note, normalize_note_url,
-                                 normalize_xhs_url, prepare_edge_driver, stop_service_safely, unsupported_windows_message,
+                                 external_program_environment, installed_chrome_version, normalize_xhs_url, prepare_edge_driver,
+                                 stop_service_safely, unsupported_windows_message,
                                  validate_navigation_url)
 
 
@@ -45,6 +47,77 @@ class BrowserNormalizationTests(unittest.TestCase):
             self.assertEqual(bundled_chrome_paths(root_path), (str(browser), str(driver)))
             self.assertEqual(browser_candidates("auto", root_path)[0], ("chrome", str(browser)))
             self.assertIn(("chrome", str(browser)), browser_candidates("edge", root_path))
+
+    def test_bundled_driver_can_follow_a_system_chrome_patch_update(self):
+        self.assertTrue(chrome_versions_share_build("152.0.7977.82", "152.0.7977.83"))
+        self.assertFalse(chrome_versions_share_build("152.0.7977.82", "152.0.7978.1"))
+        self.assertFalse(chrome_versions_share_build("152.0.7977.82", "not-a-version"))
+        self.assertFalse(chrome_versions_share_build(None, "152.0.7977.83"))
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root).resolve()
+            bundled_browser = root_path / "bundle" / "chrome-win64" / "chrome.exe"
+            bundled_driver = root_path / "bundle" / "chromedriver-win64" / "chromedriver.exe"
+            system_browser = root_path / "system" / "Application" / "chrome.exe"
+            bundled_browser.parent.mkdir(parents=True)
+            bundled_driver.parent.mkdir(parents=True)
+            system_browser.parent.mkdir(parents=True)
+            bundled_browser.touch()
+            bundled_driver.touch()
+            system_browser.touch()
+            (bundled_browser.parent / "152.0.7977.82.manifest").touch()
+            self.assertEqual(bundled_chrome_version(bundled_browser), "152.0.7977.82")
+            bundle = (str(bundled_browser), str(bundled_driver))
+            with patch("xhs_console.browser.installed_chrome_version", return_value="152.0.7977.83"):
+                self.assertEqual(bundled_driver_for_chrome(system_browser, bundle), str(bundled_driver))
+            with patch("xhs_console.browser.installed_chrome_version", return_value="152.0.7978.1"):
+                self.assertIsNone(bundled_driver_for_chrome(system_browser, bundle))
+            with patch("xhs_console.browser.installed_chrome_version", return_value=None):
+                self.assertIsNone(bundled_driver_for_chrome(system_browser, bundle))
+
+    def test_compatible_system_chrome_precedes_the_online_edge_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root).resolve()
+            resource_root = root_path / "resources"
+            bundled_browser = resource_root / "browser" / "chrome-win64" / "chrome.exe"
+            bundled_driver = resource_root / "browser" / "chromedriver-win64" / "chromedriver.exe"
+            system_browser = root_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+            edge = root_path / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            for executable in (bundled_browser, bundled_driver, system_browser, edge):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.touch()
+            (bundled_browser.parent / "152.0.7977.82.manifest").touch()
+            (system_browser.parent / "152.0.7977.83").mkdir()
+            environment = {"PROGRAMFILES": root, "PROGRAMFILES(X86)": "", "LOCALAPPDATA": ""}
+            with (patch.dict(os.environ, environment),
+                  patch("xhs_console.browser.shutil.which", return_value=None),
+                  patch("xhs_console.browser._windows_file_version", return_value=None)):
+                candidates = browser_candidates("auto", resource_root)
+        self.assertEqual(candidates[:3], [
+            ("chrome", str(bundled_browser)),
+            ("chrome", str(system_browser)),
+            ("edge", str(edge)),
+        ])
+
+    def test_selected_chrome_file_version_wins_over_stale_install_folders(self):
+        with tempfile.TemporaryDirectory() as root:
+            browser = Path(root) / "Application" / "chrome.exe"
+            browser.parent.mkdir(parents=True)
+            browser.touch()
+            (browser.parent / "999.0.9999.99").mkdir()
+            with patch("xhs_console.browser._windows_file_version", return_value="152.0.7977.83"):
+                self.assertEqual(installed_chrome_version(browser), "152.0.7977.83")
+
+    def test_frozen_windows_temporarily_restores_the_system_dll_search_path(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as root:
+            with (patch("xhs_console.browser.sys.platform", "win32"),
+                  patch.object(__import__("sys"), "frozen", True, create=True),
+                  patch.object(__import__("sys"), "_MEIPASS", root, create=True),
+                  patch("xhs_console.browser._set_windows_dll_directory", side_effect=calls.append)):
+                with external_program_environment():
+                    calls.append("browser-started")
+        self.assertEqual(calls, [None, "browser-started", str(Path(root).resolve())])
 
     def test_installed_edge_failure_retains_managed_chrome_fallback(self):
         with tempfile.TemporaryDirectory() as root:
@@ -218,9 +291,12 @@ class BrowserNormalizationTests(unittest.TestCase):
 
 class BrowserPauseTests(unittest.TestCase):
     def test_bundled_chrome_crash_retries_with_isolated_software_profile(self):
+        service_calls = []
+
         class FakeService:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
+                service_calls.append(kwargs)
 
             def stop(self):
                 pass
@@ -265,6 +341,7 @@ class BrowserPauseTests(unittest.TestCase):
                   patch("xhs_console.remote_browser.RemoteBrowserTransport", FakeTransport)):
                 session.open(headless=True, browser="auto")
         self.assertEqual(constructor.call_count, 3)
+        self.assertEqual([call["executable_path"] for call in service_calls], [str(executable)] * 3)
         recovery_options = constructor.call_args_list[1].kwargs["options"]
         self.assertIn("--disable-gpu", recovery_options.arguments)
         self.assertTrue(any("chrome-compat" in argument for argument in recovery_options.arguments))
@@ -273,6 +350,64 @@ class BrowserPauseTests(unittest.TestCase):
         self.assertFalse(any(argument.startswith("--window-position") for argument in server_options.arguments))
         self.assertTrue(any("软件渲染" in message for _, message in events))
         self.assertTrue(any("无桌面模式" in message for _, message in events))
+
+    def test_compatible_system_chrome_uses_the_bundled_driver_offline(self):
+        service_calls = []
+
+        class FakeService:
+            def __init__(self, **kwargs):
+                service_calls.append(kwargs)
+
+            def stop(self):
+                pass
+
+        class FakeDriver:
+            capabilities = {"goog:chromeOptions": {"debuggerAddress": "127.0.0.1:9001"}}
+            current_window_handle = "CDwindow-chrome"
+            window_handles = [current_window_handle]
+
+            def set_page_load_timeout(self, _seconds):
+                pass
+
+            def set_script_timeout(self, _seconds):
+                pass
+
+            def get(self, _url):
+                pass
+
+        class FakeTransport:
+            def __init__(self, *_args):
+                pass
+
+            def start(self):
+                pass
+
+            def wait_until_ready(self, timeout):
+                return True
+
+        events = []
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root).resolve()
+            bundled_browser = root_path / "bundle" / "chrome.exe"
+            bundled_driver = root_path / "bundle" / "chromedriver.exe"
+            system_browser = root_path / "system" / "chrome.exe"
+            for executable in (bundled_browser, bundled_driver, system_browser):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.touch()
+            session = BrowserSession(root_path, lambda level, message: events.append((level, message)), lambda *_: None)
+            with (patch("xhs_console.browser.browser_candidates", return_value=[("chrome", str(system_browser))]),
+                  patch("xhs_console.browser.bundled_chrome_paths",
+                        return_value=(str(bundled_browser), str(bundled_driver))),
+                  patch("xhs_console.browser.installed_chrome_version", return_value="152.0.7977.83"),
+                  patch("xhs_console.browser.bundled_chrome_version", return_value="152.0.7977.82"),
+                  patch("selenium.webdriver.Chrome", return_value=FakeDriver()) as constructor,
+                  patch("selenium.webdriver.chrome.service.Service", FakeService),
+                  patch("xhs_console.remote_browser.RemoteBrowserTransport", FakeTransport)):
+                session.open(headless=True, browser="auto")
+        self.assertEqual(constructor.call_count, 1)
+        self.assertEqual(service_calls[0]["executable_path"], str(bundled_driver))
+        self.assertEqual(constructor.call_args.kwargs["options"].binary_location, str(system_browser))
+        self.assertTrue(any("内置匹配驱动启动本机 Chrome" in message for _, message in events))
 
     def test_edge_without_live_frame_is_closed_and_falls_back_to_bundled_chrome(self):
         class FakeService:
