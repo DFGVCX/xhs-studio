@@ -12,6 +12,7 @@ import http.client
 import ipaddress
 import json
 import math
+import socket
 import threading
 import time
 from collections import deque
@@ -112,6 +113,11 @@ class RemoteBrowserTransport:
         if parsed.username or parsed.password or parsed.path not in ("", "/"):
             raise ValueError("无效的本机浏览器调试地址")
         self._host, self._port = parsed.hostname, parsed.port
+        # Some managed Windows images resolve ``localhost`` to IPv6 while
+        # Chromium's ephemeral DevTools port listens only on IPv4.  Keep both
+        # loopback families available and remember the one that answered.
+        self._connect_hosts = ("127.0.0.1", "::1") if self._host.lower() == "localhost" else (self._host,)
+        self._connect_host = self._connect_hosts[0]
         self.target_id = str(target_id).removeprefix("CDwindow-")
         self._emit = emit or (lambda *_: None)
         self._lock = threading.RLock()
@@ -231,15 +237,24 @@ class RemoteBrowserTransport:
         return done.wait(timeout=max(0, timeout))
 
     def _endpoint(self) -> str:
-        connection = http.client.HTTPConnection(self._host, self._port, timeout=2)
-        try:
-            connection.request("GET", "/json/list")
-            response = connection.getresponse()
-            if response.status != 200:
-                raise RuntimeError("浏览器调试端口暂不可用")
-            targets = json.loads(response.read(2_000_000))
-        finally:
-            connection.close()
+        targets = None
+        last_error = None
+        for host in self._connect_hosts:
+            connection = http.client.HTTPConnection(host, self._port, timeout=2)
+            try:
+                connection.request("GET", "/json/list")
+                response = connection.getresponse()
+                if response.status != 200:
+                    raise RuntimeError("浏览器调试端口暂不可用")
+                targets = json.loads(response.read(2_000_000))
+                self._connect_host = host
+                break
+            except (OSError, TimeoutError, http.client.HTTPException) as exc:
+                last_error = exc
+            finally:
+                connection.close()
+        if targets is None:
+            raise RuntimeError("无法直连本机浏览器调试端口，请检查安全软件的本机网络拦截") from last_error
         target = next((item for item in targets if item.get("id") == self.target_id and item.get("type") == "page"), None)
         if target is None:
             raise RuntimeError("当前浏览器标签页已关闭")
@@ -248,6 +263,23 @@ class RemoteBrowserTransport:
         if parsed.scheme != "ws" or not parsed.hostname or not _loopback_host(parsed.hostname) or parsed.port != self._port:
             raise RuntimeError("浏览器返回了无效的本机调试地址")
         return endpoint
+
+    def _connect_websocket(self, endpoint: str):
+        """Open CDP on a pre-connected loopback socket, never through a proxy.
+
+        ``websocket-client`` otherwise re-reads HTTP_PROXY/HTTPS_PROXY.  The
+        endpoint returned by Chromium may spell the same address differently
+        (``localhost`` versus ``127.0.0.1``), defeating a host-only no-proxy
+        list on corporate Windows machines.
+        """
+        raw = socket.create_connection((self._connect_host, self._port), timeout=2)
+        try:
+            return websocket.create_connection(
+                endpoint, timeout=2, suppress_origin=True, enable_multithread=True,
+                http_no_proxy=["*"], socket=raw)
+        except Exception:
+            raw.close()
+            raise
 
     def _send(self, method: str, params: dict | None = None, track: bool = False) -> int:
         self._command_id += 1
@@ -267,8 +299,10 @@ class RemoteBrowserTransport:
                 endpoint = self._endpoint()
                 if self._stop.is_set():
                     break
-                connection = websocket.create_connection(endpoint, timeout=2, suppress_origin=True,
-                                                         enable_multithread=True, http_no_proxy=[self._host])
+                try:
+                    connection = self._connect_websocket(endpoint)
+                except (OSError, TimeoutError, websocket.WebSocketException) as exc:
+                    raise RuntimeError("无法建立本机浏览器画面通道，请检查代理或安全软件的本机连接规则") from exc
                 connection.settimeout(.025)
                 with self._lock:
                     self._ws = connection

@@ -196,6 +196,22 @@ def browser_connection_arguments(direct_connection: bool) -> tuple[str, ...]:
     return ("--no-proxy-server", "--proxy-bypass-list=*") if direct_connection else ()
 
 
+def ensure_loopback_no_proxy() -> None:
+    """Keep Selenium's local driver channel out of machine-wide proxies.
+
+    Selenium talks to ChromeDriver over a random localhost port before any
+    browser option takes effect. Corporate images sometimes define HTTP_PROXY
+    without NO_PROXY, which sends that private control traffic to the proxy.
+    Populate both spellings because dependencies differ in which one they read.
+    """
+    required = ("127.0.0.1", "localhost", "::1")
+    for key in ("NO_PROXY", "no_proxy"):
+        values = [item.strip() for item in os.environ.get(key, "").split(",") if item.strip()]
+        lowered = {item.lower() for item in values}
+        values.extend(item for item in required if item.lower() not in lowered)
+        os.environ[key] = ",".join(values)
+
+
 def browser_display_arguments(embedded_only: bool) -> tuple[str, ...]:
     """Keep an ordinary Chromium renderer off-screen for the embedded viewer.
 
@@ -321,6 +337,7 @@ class BrowserSession:
     def open(self, headless: bool = False, browser: str = "auto", direct_connection: bool = True) -> None:
         if self.driver is not None:
             return
+        ensure_loopback_no_proxy()
         from selenium import webdriver
         from selenium.webdriver.chrome.service import Service as ChromeService
         from selenium.webdriver.edge.service import Service as EdgeService

@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import quote
 
 from xhs_console.browser import BrowserSession
@@ -34,6 +35,19 @@ class RemoteBrowserProtocolTests(unittest.TestCase):
             with self.subTest(address=address), self.assertRaises(ValueError):
                 RemoteBrowserTransport(address, "ABC")
         self.assertEqual(self.remote.target_id, "ABC")
+
+    def test_localhost_prefers_ipv4_and_websocket_cannot_use_environment_proxy(self):
+        remote = RemoteBrowserTransport("localhost:9222", "ABC")
+        self.assertEqual(remote._connect_hosts, ("127.0.0.1", "::1"))
+        raw, connected = FakeSocket(), FakeSocket()
+        with (patch("xhs_console.remote_browser.socket.create_connection", return_value=raw) as direct,
+              patch("xhs_console.remote_browser.websocket.create_connection", return_value=connected) as websocket_connect):
+            result = remote._connect_websocket("ws://localhost:9222/devtools/page/ABC")
+        self.assertIs(result, connected)
+        direct.assert_called_once_with(("127.0.0.1", 9222), timeout=2)
+        options = websocket_connect.call_args.kwargs
+        self.assertEqual(options["http_no_proxy"], ["*"])
+        self.assertIs(options["socket"], raw)
 
     def test_invalid_input_and_nonfinite_coordinates_are_rejected(self):
         for action in (None, {"type": "script"}, {"type": "pointer", "event": "down", "x": float("nan")},

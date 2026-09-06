@@ -13,7 +13,7 @@ from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, bro
                                  browser_connection_arguments, browser_display_arguments, browser_recovery_arguments,
                                  bundled_chrome_paths,
                                  configure_browser_binary, debugger_address_from_capabilities,
-                                 deduplicate_note_urls, normalize_note, normalize_note_url,
+                                 deduplicate_note_urls, ensure_loopback_no_proxy, normalize_note, normalize_note_url,
                                  normalize_xhs_url, stop_service_safely, unsupported_windows_message,
                                  validate_navigation_url)
 
@@ -69,6 +69,16 @@ class BrowserNormalizationTests(unittest.TestCase):
     def test_direct_connection_explicitly_bypasses_browser_proxy(self):
         self.assertEqual(browser_connection_arguments(True), ("--no-proxy-server", "--proxy-bypass-list=*"))
         self.assertEqual(browser_connection_arguments(False), ())
+
+    def test_local_selenium_control_ports_never_use_global_proxy(self):
+        with patch.dict(os.environ, {"NO_PROXY": "internal.example"}, clear=False):
+            ensure_loopback_no_proxy()
+            for key in ("NO_PROXY", "no_proxy"):
+                values = os.environ[key].split(",")
+                self.assertIn("127.0.0.1", values)
+                self.assertIn("localhost", values)
+                self.assertIn("::1", values)
+            self.assertIn("internal.example", os.environ["NO_PROXY"])
 
     def test_embedded_display_uses_offscreen_window_not_headless_mode(self):
         arguments = browser_display_arguments(True)
