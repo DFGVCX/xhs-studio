@@ -88,7 +88,10 @@ class BrowserNormalizationTests(unittest.TestCase):
                 executable.touch()
             (bundled_browser.parent / "152.0.7977.82.manifest").touch()
             (system_browser.parent / "152.0.7977.83").mkdir()
-            environment = {"PROGRAMFILES": root, "PROGRAMFILES(X86)": "", "LOCALAPPDATA": ""}
+            # Windows runners may expose the temporary directory through an 8.3
+            # alias (for example RUNNER~1) while Path.resolve() expands it. Keep
+            # discovery and the expected paths in the same canonical namespace.
+            environment = {"PROGRAMFILES": str(root_path), "PROGRAMFILES(X86)": "", "LOCALAPPDATA": ""}
             with (patch.dict(os.environ, environment),
                   patch("xhs_console.browser.shutil.which", return_value=None),
                   patch("xhs_console.browser._windows_file_version", return_value=None)):
