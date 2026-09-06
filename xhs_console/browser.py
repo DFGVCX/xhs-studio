@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable
@@ -162,9 +163,9 @@ def browser_candidates(preference: str = "auto", resource_root: Path | None = No
     if preference not in ("auto", "chrome", "edge"):
         raise ValueError("浏览器必须为 auto、chrome 或 edge")
     roots = [os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")]
-    # The portable Chrome remains the deterministic first choice. If it is
-    # blocked by application-control software, prefer Windows' signed Edge over
-    # another locally installed Chrome whose driver would also need discovery.
+    # The portable Chrome remains the deterministic first choice. A compatible
+    # installed Chrome can reuse its driver offline; otherwise keep signed Edge
+    # ahead of browsers whose driver would still need network discovery.
     names = ("edge", "chrome") if preference == "auto" else (preference,)
     candidates = []
     bundled = bundled_chrome_paths(resource_root)
@@ -184,6 +185,11 @@ def browser_candidates(preference: str = "auto", resource_root: Path | None = No
         # Treat the explicit engine as a preference, not a reason to make the
         # portable release unusable when that machine's Edge driver is blocked.
         candidates.append(("chrome", bundled[0]))
+    if bundled and preference == "auto":
+        for index, (name, binary) in enumerate(candidates[1:], start=1):
+            if name == "chrome" and bundled_driver_for_chrome(binary, bundled):
+                candidates.insert(1, candidates.pop(index))
+                break
     # A discovered browser can still fail when its matching driver is unavailable.
     # Keep an independently managed fallback for every missing engine instead of
     # stopping after the first installed browser (the former Edge-only failure).
@@ -193,21 +199,71 @@ def browser_candidates(preference: str = "auto", resource_root: Path | None = No
     return candidates
 
 
-def installed_edge_version(binary: str | Path) -> str | None:
-    """Read the installed Edge version without launching the browser.
+def _windows_file_version(binary: str | Path) -> str | None:
+    """Read the selected executable's fixed file version without running it."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
 
-    Edge's ``--version`` is not a console operation on Windows and may open a
-    normal browser window instead. BLBeacon is the version source maintained by
-    the Edge updater. Version-named application folders provide a safe fallback.
-    """
+        class FixedFileInfo(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint32) for name in (
+                "signature", "structure_version", "file_version_ms", "file_version_ls",
+                "product_version_ms", "product_version_ls", "flags_mask", "flags", "os",
+                "file_type", "file_subtype", "file_date_ms", "file_date_ls",
+            )]
+
+        version = ctypes.WinDLL("version", use_last_error=True)
+        version.GetFileVersionInfoSizeW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p]
+        version.GetFileVersionInfoSizeW.restype = ctypes.c_uint32
+        version.GetFileVersionInfoW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+        version.GetFileVersionInfoW.restype = ctypes.c_bool
+        version.VerQueryValueW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p,
+                                           ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32)]
+        version.VerQueryValueW.restype = ctypes.c_bool
+        path = str(Path(binary).resolve())
+        size = version.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return None
+        data = ctypes.create_string_buffer(size)
+        if not version.GetFileVersionInfoW(path, 0, size, data):
+            return None
+        value = ctypes.c_void_p()
+        length = ctypes.c_uint32()
+        if not version.VerQueryValueW(data, "\\", ctypes.byref(value), ctypes.byref(length)):
+            return None
+        info = ctypes.cast(value, ctypes.POINTER(FixedFileInfo)).contents
+        parts = (info.file_version_ms >> 16, info.file_version_ms & 0xFFFF,
+                 info.file_version_ls >> 16, info.file_version_ls & 0xFFFF)
+        result = ".".join(str(part) for part in parts)
+        return result if EDGE_VERSION.fullmatch(result) else None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _installed_chromium_version(binary: str | Path, registry_key: str | None) -> str | None:
+    """Read the selected Chromium executable version without launching it."""
+    file_version = _windows_file_version(binary)
+    if file_version:
+        return file_version
     versions: list[str] = []
-    if os.name == "nt":
+    try:
+        application_dir = Path(binary).resolve().parent
+        versions.extend(
+            child.name for child in application_dir.iterdir()
+            if child.is_dir() and EDGE_VERSION.fullmatch(child.name)
+        )
+    except OSError:
+        pass
+    if versions:
+        return max(set(versions), key=lambda value: tuple(int(part) for part in value.split(".")))
+    if os.name == "nt" and registry_key:
         try:
             import winreg
             locations = (
-                (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Edge\BLBeacon", 0),
-                (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Edge\BLBeacon", winreg.KEY_WOW64_64KEY),
-                (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Edge\BLBeacon", winreg.KEY_WOW64_32KEY),
+                (winreg.HKEY_CURRENT_USER, registry_key, 0),
+                (winreg.HKEY_LOCAL_MACHINE, registry_key, winreg.KEY_WOW64_64KEY),
+                (winreg.HKEY_LOCAL_MACHINE, registry_key, winreg.KEY_WOW64_32KEY),
             )
             for hive, key_name, access in locations:
                 try:
@@ -219,17 +275,53 @@ def installed_edge_version(binary: str | Path) -> str | None:
                     continue
         except (ImportError, AttributeError):
             pass
+    return max(set(versions), key=lambda value: tuple(int(part) for part in value.split("."))) if versions else None
+
+
+def installed_edge_version(binary: str | Path) -> str | None:
+    """Read the installed Edge version from BLBeacon or its application folder."""
+    return _installed_chromium_version(binary, r"Software\Microsoft\Edge\BLBeacon")
+
+
+def installed_chrome_version(binary: str | Path) -> str | None:
+    """Read the selected Chrome executable version without using another install."""
+    return _installed_chromium_version(binary, None)
+
+
+def bundled_chrome_version(binary: str | Path) -> str | None:
+    """Read Chrome for Testing's version-named assembly manifest."""
     try:
-        application_dir = Path(binary).resolve().parent
-        versions.extend(
-            child.name for child in application_dir.iterdir()
-            if child.is_dir() and EDGE_VERSION.fullmatch(child.name)
-        )
+        versions = [
+            item.stem for item in Path(binary).resolve().parent.glob("*.manifest")
+            if EDGE_VERSION.fullmatch(item.stem)
+        ]
     except OSError:
-        pass
+        return None
     if not versions:
         return None
     return max(set(versions), key=lambda value: tuple(int(part) for part in value.split(".")))
+
+
+def chrome_versions_share_build(first: str | None, second: str | None) -> bool:
+    """ChromeDriver patch revisions are compatible within one MAJOR.MINOR.BUILD."""
+    if not first or not second or not EDGE_VERSION.fullmatch(first) or not EDGE_VERSION.fullmatch(second):
+        return False
+    return first.rsplit(".", 1)[0] == second.rsplit(".", 1)[0]
+
+
+def bundled_driver_for_chrome(binary: str | Path | None,
+                              bundled: tuple[str, str] | None) -> str | None:
+    """Reuse the release driver only for its browser or a compatible system Chrome."""
+    if not binary or not bundled:
+        return None
+    try:
+        if Path(binary).resolve() == Path(bundled[0]).resolve():
+            return bundled[1]
+    except OSError:
+        return None
+    if chrome_versions_share_build(installed_chrome_version(binary), bundled_chrome_version(bundled[0])):
+        return bundled[1]
+    return None
 
 
 def prepare_edge_driver(binary: str | Path, cache_root: Path) -> str:
@@ -394,6 +486,32 @@ def configure_browser_binary(options, binary: str | None) -> None:
         options.browser_version = "stable"
 
 
+def _set_windows_dll_directory(path: str | None) -> None:
+    """Set the process DLL directory and surface Win32 failures."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.SetDllDirectoryW.argtypes = [ctypes.c_wchar_p]
+    kernel32.SetDllDirectoryW.restype = ctypes.c_bool
+    if not kernel32.SetDllDirectoryW(path):
+        raise OSError(ctypes.get_last_error(), "SetDllDirectoryW failed")
+
+
+@contextmanager
+def external_program_environment():
+    """Keep external browsers from inheriting PyInstaller's private DLL path."""
+    frozen_windows = sys.platform == "win32" and getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+    if not frozen_windows:
+        yield
+        return
+    restore = str(Path(sys._MEIPASS).resolve())
+    _set_windows_dll_directory(None)
+    try:
+        yield
+    finally:
+        _set_windows_dll_directory(restore)
+
+
 def debugger_address_from_capabilities(capabilities: dict, browser: str) -> str:
     """Read the local DevTools endpoint from Chrome or Edge capabilities."""
     keys = ("ms:edgeOptions", "goog:chromeOptions") if browser == "edge" else ("goog:chromeOptions", "ms:edgeOptions")
@@ -497,6 +615,7 @@ class BrowserSession:
             persistent_profile = self.project_dir / "runtime" / "profiles" / name
             is_bundled = bool(name == "chrome" and bundled and binary
                               and Path(binary).resolve() == Path(bundled[0]).resolve())
+            chrome_driver = bundled_driver_for_chrome(binary, bundled) if name == "chrome" else None
             edge_driver = None
             edge_prepare_error = None
             if name == "edge" and binary:
@@ -513,7 +632,7 @@ class BrowserSession:
             # Some Windows Server/RDP images cannot create a regular off-screen
             # window. Once a local driver is known, real Chromium headless mode
             # remains fully capturable through the same CDP transport.
-            if headless and (is_bundled or edge_driver):
+            if headless and (chrome_driver or edge_driver):
                 attempts.append((persistent_profile.parent / f"{name}-server", True, True, "-server"))
             for profile, recovery, native_headless, suffix in attempts:
                 profile.mkdir(parents=True, exist_ok=True)
@@ -544,8 +663,8 @@ class BrowserSession:
                     options.add_argument(argument)
                 service_type = ChromeService if name == "chrome" else EdgeService
                 service_options = {"log_output": str(driver_log), "service_args": ["--verbose"]}
-                if is_bundled:
-                    service_options["executable_path"] = bundled[1]
+                if chrome_driver:
+                    service_options["executable_path"] = chrome_driver
                 elif name == "edge" and edge_driver:
                     service_options["executable_path"] = edge_driver
                 if os.name == "nt":
@@ -557,6 +676,8 @@ class BrowserSession:
                     self.emit("warning", "内置 Chrome 标准启动失败，正在使用干净配置与软件渲染重试")
                 elif is_bundled:
                     self.emit("info", "正在启动 Release 内置 Chrome，无需联网下载浏览器或驱动")
+                elif name == "chrome" and chrome_driver:
+                    self.emit("info", "正在使用 Release 内置匹配驱动启动本机 Chrome，无需联网下载驱动")
                 elif name == "edge" and edge_driver:
                     self.emit("info", "正在使用 Microsoft 官方匹配驱动启动本机 Edge")
                 else:
@@ -565,7 +686,8 @@ class BrowserSession:
                 try:
                     service = service_type(**service_options)
                     constructor = webdriver.Chrome if name == "chrome" else webdriver.Edge
-                    self.driver = constructor(options=options, service=service)
+                    with external_program_environment():
+                        self.driver = constructor(options=options, service=service)
                     self.browser = name
                     self.direct_connection = direct_connection
                     self.driver.set_page_load_timeout(30)

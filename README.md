@@ -55,7 +55,7 @@
 
 ### 提示 `Unable to obtain driver` 或 `Chrome failed to start: crashed`
 
-这是浏览器启动阶段的错误，还没有进入网页采集。最新版在内置 Chrome 标准启动失败后，会依次尝试软件渲染和 Windows Server 无桌面模式；如果内置 Chrome 被服务器的应用控制或安全软件终止，还会读取本机 Edge 的准确版本，从 Microsoft 官方地址自动下载匹配的已签名 EdgeDriver 并缓存到 `runtime/selenium`，用户不需要手动安装驱动。请完整解压 ZIP 后运行，不要只复制 EXE。首次启用 Edge 备用方案需要能够访问 `msedgedriver.microsoft.com`。内置 Chrome 支持 Windows 10/11 x64 与 Windows Server 2016 及以上版本；Windows 7/8、Windows Server 2012/2012 R2 无法运行当前安全版本的 Chrome。
+这是浏览器启动阶段的错误，还没有进入网页采集。最新版在内置 Chrome 标准启动失败后，会依次尝试软件渲染和 Windows Server 无桌面模式；如果内置 Chrome 被服务器的应用控制或安全软件终止，会在本机 Chrome 与 Release 驱动属于同一 `MAJOR.MINOR.BUILD` 时离线复用该驱动，不要求 Selenium Manager 联网下载。仍无法启动时，还会读取本机 Edge 的准确版本，从 Microsoft 官方地址自动下载匹配的已签名 EdgeDriver 并缓存到 `runtime/selenium`，用户不需要手动安装驱动。请完整解压 ZIP 后运行，不要只复制 EXE。首次启用 Edge 备用方案需要能够访问 `msedgedriver.microsoft.com`。内置 Chrome 支持 Windows 10/11 x64 与 Windows Server 2016 及以上版本；Windows 7/8、Windows Server 2012/2012 R2 无法运行当前安全版本的 Chrome。
 
 ### 小红书提示“安全限制 / IP 存在风险 / 300012”
 
