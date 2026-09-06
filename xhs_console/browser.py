@@ -14,15 +14,19 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable
+from urllib.request import Request, ProxyHandler, build_opener, urlopen
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 
 NOTE_PATH = re.compile(r"/(?:explore|discovery/item|search_result)/([a-fA-F0-9]{24})(?:/|$)")
 ALLOWED_HOSTS = ("xiaohongshu.com", "xhslink.com")
 XHS_HOME = "https://www.xiaohongshu.com/explore"
+EDGE_DRIVER_ORIGIN = "https://msedgedriver.microsoft.com"
+EDGE_VERSION = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
 
 class NeedsInteraction(RuntimeError):
@@ -158,7 +162,10 @@ def browser_candidates(preference: str = "auto", resource_root: Path | None = No
     if preference not in ("auto", "chrome", "edge"):
         raise ValueError("浏览器必须为 auto、chrome 或 edge")
     roots = [os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")]
-    names = ("chrome", "edge") if preference == "auto" else (preference,)
+    # The portable Chrome remains the deterministic first choice. If it is
+    # blocked by application-control software, prefer Windows' signed Edge over
+    # another locally installed Chrome whose driver would also need discovery.
+    names = ("edge", "chrome") if preference == "auto" else (preference,)
     candidates = []
     bundled = bundled_chrome_paths(resource_root)
     if bundled and preference in ("auto", "chrome"):
@@ -184,6 +191,118 @@ def browser_candidates(preference: str = "auto", resource_root: Path | None = No
         if not any(candidate_name == name for candidate_name, _ in candidates):
             candidates.append((name, None))
     return candidates
+
+
+def installed_edge_version(binary: str | Path) -> str | None:
+    """Read the installed Edge version without launching the browser.
+
+    Edge's ``--version`` is not a console operation on Windows and may open a
+    normal browser window instead. BLBeacon is the version source maintained by
+    the Edge updater. Version-named application folders provide a safe fallback.
+    """
+    versions: list[str] = []
+    if os.name == "nt":
+        try:
+            import winreg
+            locations = (
+                (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Edge\BLBeacon", 0),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Edge\BLBeacon", winreg.KEY_WOW64_64KEY),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Edge\BLBeacon", winreg.KEY_WOW64_32KEY),
+            )
+            for hive, key_name, access in locations:
+                try:
+                    with winreg.OpenKey(hive, key_name, 0, winreg.KEY_READ | access) as key:
+                        value = str(winreg.QueryValueEx(key, "version")[0]).strip()
+                        if EDGE_VERSION.fullmatch(value):
+                            versions.append(value)
+                except OSError:
+                    continue
+        except (ImportError, AttributeError):
+            pass
+    try:
+        application_dir = Path(binary).resolve().parent
+        versions.extend(
+            child.name for child in application_dir.iterdir()
+            if child.is_dir() and EDGE_VERSION.fullmatch(child.name)
+        )
+    except OSError:
+        pass
+    if not versions:
+        return None
+    return max(set(versions), key=lambda value: tuple(int(part) for part in value.split(".")))
+
+
+def prepare_edge_driver(binary: str | Path, cache_root: Path) -> str:
+    """Download and cache the exact Microsoft-signed driver for installed Edge.
+
+    Selenium Manager is still retained as a final fallback, but it has failed on
+    several restricted Windows images even when Microsoft's direct driver URL is
+    reachable. Only the exact four-part installed version and Microsoft's HTTPS
+    endpoint are accepted. The archive is bounded and only the expected member
+    is extracted, preventing path traversal and unbounded downloads.
+    """
+    version = installed_edge_version(binary)
+    if not version:
+        raise RuntimeError("无法读取本机 Edge 的准确版本")
+    target_dir = Path(cache_root).resolve() / "edge" / version
+    target = target_dir / "msedgedriver.exe"
+    if target.is_file() and target.stat().st_size >= 1_000_000:
+        return str(target)
+
+    url = f"{EDGE_DRIVER_ORIGIN}/{version}/edgedriver_win64.zip"
+    request = Request(url, headers={"User-Agent": "XHS-Studio EdgeDriver bootstrap"})
+    last_error: Exception | None = None
+    data: bytes | None = None
+    openers = (
+        lambda: urlopen(request, timeout=35),
+        lambda: build_opener(ProxyHandler({})).open(request, timeout=35),
+    )
+    for open_download in openers:
+        try:
+            with open_download() as response:
+                final = urlsplit(response.geturl())
+                if final.scheme != "https" or final.hostname not in {
+                    "msedgedriver.microsoft.com",
+                    "msedgewebdriverstorage.z22.web.core.windows.net",
+                }:
+                    raise RuntimeError("EdgeDriver 下载被重定向到非 Microsoft 地址")
+                chunks = []
+                total = 0
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 64 * 1024 * 1024:
+                        raise RuntimeError("EdgeDriver 下载内容超过安全大小限制")
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+            break
+        except Exception as exc:
+            last_error = exc
+    if data is None:
+        raise RuntimeError(f"无法从 Microsoft 下载 EdgeDriver：{last_error}") from last_error
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = {name.replace("\\", "/").lower(): name for name in archive.namelist()}
+            member = names.get("msedgedriver.exe")
+            if not member:
+                raise RuntimeError("Microsoft EdgeDriver 压缩包中缺少 msedgedriver.exe")
+            executable = archive.read(member)
+            edge_eula = archive.read(names["driver_notes/eula"]) if "driver_notes/eula" in names else None
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        raise RuntimeError("Microsoft EdgeDriver 下载包损坏") from exc
+    if len(executable) < 1_000_000:
+        raise RuntimeError("Microsoft EdgeDriver 文件大小异常")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(".exe.partial")
+    partial.write_bytes(executable)
+    os.replace(partial, target)
+    if edge_eula:
+        (target_dir / "Microsoft-Edge-WebDriver-EULA.txt").write_bytes(edge_eula)
+    return str(target)
 
 
 def browser_connection_arguments(direct_connection: bool) -> tuple[str, ...]:
@@ -244,7 +363,14 @@ def browser_recovery_arguments(enabled: bool) -> tuple[str, ...]:
         "--disable-gpu",
         "--disable-extensions",
         "--disable-background-networking",
+        "--disable-crash-reporter",
+        "--disable-breakpad",
     )
+
+
+def browser_native_headless_arguments(enabled: bool) -> tuple[str, ...]:
+    """Use Chromium's real headless renderer as the final server fallback."""
+    return ("--headless=new",) if enabled else ()
 
 
 def unsupported_windows_message() -> str | None:
@@ -289,6 +415,24 @@ def stop_service_safely(service) -> None:
         # Selenium's Service may not create ``process`` when driver discovery,
         # download, permissions, or process creation fails before start().
         pass
+
+
+def browser_crash_summary(path: Path, limit: int = 600) -> str | None:
+    """Return a compact startup-only diagnostic from Chromium's own log."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    relevant = []
+    for line in lines[-300:]:
+        text = line.strip()
+        lowered = text.lower()
+        if text and any(marker in lowered for marker in ("error:", "fatal:", "failed", "status_", "access denied")):
+            relevant.append(text)
+    if not relevant:
+        return None
+    summary = " | ".join(relevant[-3:])
+    return summary[:limit] + ("…" if len(summary) > limit else "")
 
 
 ACCESS_SCRIPT = r"""
@@ -353,11 +497,34 @@ class BrowserSession:
             persistent_profile = self.project_dir / "runtime" / "profiles" / name
             is_bundled = bool(name == "chrome" and bundled and binary
                               and Path(binary).resolve() == Path(bundled[0]).resolve())
-            attempts = [(persistent_profile, False)]
+            edge_driver = None
+            edge_prepare_error = None
+            if name == "edge" and binary:
+                try:
+                    self.emit("info", "正在从 Microsoft 为本机 Edge 自动准备匹配驱动")
+                    edge_driver = prepare_edge_driver(binary, manager_cache)
+                except Exception as exc:
+                    edge_prepare_error = str(exc).splitlines()[0].strip() or type(exc).__name__
+                    self.emit("warning", f"Edge 精确驱动准备失败，将继续使用 Selenium 备用发现：{edge_prepare_error}")
+
+            attempts = [(persistent_profile, False, False, "")]
             if is_bundled:
-                attempts.append((persistent_profile.parent / "chrome-compat", True))
-            for profile, recovery in attempts:
+                attempts.append((persistent_profile.parent / "chrome-compat", True, False, "-compat"))
+            # Some Windows Server/RDP images cannot create a regular off-screen
+            # window. Once a local driver is known, real Chromium headless mode
+            # remains fully capturable through the same CDP transport.
+            if headless and (is_bundled or edge_driver):
+                attempts.append((persistent_profile.parent / f"{name}-server", True, True, "-server"))
+            for profile, recovery, native_headless, suffix in attempts:
                 profile.mkdir(parents=True, exist_ok=True)
+                log_dir = self.project_dir / "runtime" / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                driver_log = log_dir / f"{name}{suffix}-driver.log"
+                browser_log = log_dir / f"{name}{suffix}-browser.log"
+                try:
+                    browser_log.write_text("", encoding="utf-8")
+                except OSError:
+                    pass
                 options = webdriver.ChromeOptions() if name == "chrome" else webdriver.EdgeOptions()
                 options.page_load_strategy = "eager"
                 configure_browser_binary(options, binary)
@@ -365,27 +532,33 @@ class BrowserSession:
                 options.add_argument("--window-size=1365,900")
                 options.add_argument("--no-first-run")
                 options.add_argument("--no-default-browser-check")
+                options.add_argument("--enable-logging")
+                options.add_argument(f"--log-file={browser_log}")
                 for argument in browser_connection_arguments(direct_connection):
                     options.add_argument(argument)
-                for argument in browser_display_arguments(headless):
+                for argument in browser_display_arguments(headless and not native_headless):
                     options.add_argument(argument)
                 for argument in browser_recovery_arguments(recovery):
                     options.add_argument(argument)
+                for argument in browser_native_headless_arguments(native_headless):
+                    options.add_argument(argument)
                 service_type = ChromeService if name == "chrome" else EdgeService
-                log_dir = self.project_dir / "runtime" / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                suffix = "-compat" if recovery else ""
-                driver_log = log_dir / f"{name}{suffix}-driver.log"
                 service_options = {"log_output": str(driver_log), "service_args": ["--verbose"]}
                 if is_bundled:
                     service_options["executable_path"] = bundled[1]
+                elif name == "edge" and edge_driver:
+                    service_options["executable_path"] = edge_driver
                 if os.name == "nt":
                     service_options["popen_kw"] = {"creation_flags": subprocess.CREATE_NO_WINDOW}
                 service = None
-                if recovery:
+                if native_headless:
+                    self.emit("warning", f"{name.title()} 窗口模式启动失败，正在使用 Windows Server 无桌面模式重试")
+                elif recovery:
                     self.emit("warning", "内置 Chrome 标准启动失败，正在使用干净配置与软件渲染重试")
                 elif is_bundled:
                     self.emit("info", "正在启动 Release 内置 Chrome，无需联网下载浏览器或驱动")
+                elif name == "edge" and edge_driver:
+                    self.emit("info", "正在使用 Microsoft 官方匹配驱动启动本机 Edge")
                 else:
                     managed = "浏览器和驱动" if binary is None else "驱动"
                     self.emit("info", f"正在启动 {name.title()}，首次运行可能需要自动准备{managed}")
@@ -430,9 +603,14 @@ class BrowserSession:
                             pass
                     stop_service_safely(service)
                     detail = str(exc).splitlines()[0].strip() or type(exc).__name__
-                    label = f"{name}-compat" if recovery else name
-                    errors.append(f"{label}: {detail}（驱动日志：{driver_log}）")
-                    if not recovery:
+                    if edge_prepare_error and not edge_driver:
+                        detail = f"{detail}；Microsoft 精确驱动准备失败：{edge_prepare_error}"
+                    crash_detail = browser_crash_summary(browser_log)
+                    if crash_detail:
+                        detail = f"{detail}；浏览器日志：{crash_detail}"
+                    label = f"{name}{suffix}"
+                    errors.append(f"{label}: {detail}（驱动日志：{driver_log}；浏览器日志：{browser_log}）")
+                    if not native_headless:
                         self.emit("warning", f"{name.title()} 未能建立可操作的实时画面，正在尝试备用启动方式")
         platform_problem = unsupported_windows_message()
         platform_hint = f"{platform_problem}。" if platform_problem else ""

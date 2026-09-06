@@ -1,8 +1,10 @@
+import io
 import os
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,11 +12,13 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 from xhs_console.browser import (BrowserSession, NeedsInteraction, XHS_HOME, browser_candidates,
-                                 browser_connection_arguments, browser_display_arguments, browser_recovery_arguments,
+                                 browser_crash_summary,
+                                 browser_connection_arguments, browser_display_arguments, browser_native_headless_arguments,
+                                 browser_recovery_arguments,
                                  bundled_chrome_paths,
                                  configure_browser_binary, debugger_address_from_capabilities,
                                  deduplicate_note_urls, ensure_loopback_no_proxy, normalize_note, normalize_note_url,
-                                 normalize_xhs_url, stop_service_safely, unsupported_windows_message,
+                                 normalize_xhs_url, prepare_edge_driver, stop_service_safely, unsupported_windows_message,
                                  validate_navigation_url)
 
 
@@ -89,8 +93,55 @@ class BrowserNormalizationTests(unittest.TestCase):
     def test_recovery_mode_uses_software_rendering_without_disabling_sandbox(self):
         arguments = browser_recovery_arguments(True)
         self.assertIn("--disable-gpu", arguments)
+        self.assertIn("--disable-crash-reporter", arguments)
         self.assertNotIn("--no-sandbox", arguments)
         self.assertEqual(browser_recovery_arguments(False), ())
+
+    def test_server_fallback_uses_real_headless_without_disabling_sandbox(self):
+        arguments = browser_native_headless_arguments(True)
+        self.assertEqual(arguments, ("--headless=new",))
+        self.assertNotIn("--no-sandbox", arguments)
+        self.assertEqual(browser_native_headless_arguments(False), ())
+
+    def test_browser_crash_log_is_reduced_to_actionable_lines(self):
+        with tempfile.TemporaryDirectory() as root:
+            log = Path(root) / "chrome-browser.log"
+            log.write_text("ordinary line\n[ERROR:gpu] failed to initialize\n[FATAL:policy] access denied\n", encoding="utf-8")
+            summary = browser_crash_summary(log)
+        self.assertIn("failed to initialize", summary)
+        self.assertIn("access denied", summary)
+        self.assertNotIn("ordinary line", summary)
+
+    def test_exact_microsoft_edge_driver_is_downloaded_and_cached(self):
+        archive_bytes = io.BytesIO()
+        with zipfile.ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("msedgedriver.exe", b"MZ" + b"x" * 1_000_000)
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                pass
+
+            def geturl(self):
+                return "https://msedgedriver.microsoft.com/152.0.4191.62/edgedriver_win64.zip"
+
+            def read(self, _size):
+                data, archive_bytes.position = archive_bytes.getvalue(), getattr(archive_bytes, "position", 0)
+                if archive_bytes.position:
+                    return b""
+                archive_bytes.position = len(data)
+                return data
+
+        with tempfile.TemporaryDirectory() as root:
+            with (patch("xhs_console.browser.installed_edge_version", return_value="152.0.4191.62"),
+                  patch("xhs_console.browser.urlopen", return_value=Response()) as download):
+                first = prepare_edge_driver(Path(root) / "msedge.exe", Path(root) / "cache")
+                second = prepare_edge_driver(Path(root) / "msedge.exe", Path(root) / "cache")
+            self.assertEqual(first, second)
+            self.assertGreater(Path(first).stat().st_size, 1_000_000)
+            self.assertEqual(download.call_count, 1)
 
     def test_old_windows_gets_an_explicit_browser_support_error(self):
         with patch("xhs_console.browser.os.name", "nt"), patch("xhs_console.browser.sys.getwindowsversion", return_value=SimpleNamespace(major=6, minor=3)):
@@ -208,15 +259,20 @@ class BrowserPauseTests(unittest.TestCase):
             session = BrowserSession(Path(root), lambda level, message: events.append((level, message)), lambda *_: None)
             with (patch("xhs_console.browser.browser_candidates", return_value=[("chrome", str(chrome))]),
                   patch("xhs_console.browser.bundled_chrome_paths", return_value=(str(chrome), str(executable))),
-                  patch("selenium.webdriver.Chrome", side_effect=[RuntimeError("Chrome failed to start: crashed"), driver]) as constructor,
+                  patch("selenium.webdriver.Chrome", side_effect=[RuntimeError("Chrome failed to start: crashed"),
+                                                                   RuntimeError("Chrome failed to start: crashed"), driver]) as constructor,
                   patch("selenium.webdriver.chrome.service.Service", FakeService),
                   patch("xhs_console.remote_browser.RemoteBrowserTransport", FakeTransport)):
                 session.open(headless=True, browser="auto")
-        self.assertEqual(constructor.call_count, 2)
+        self.assertEqual(constructor.call_count, 3)
         recovery_options = constructor.call_args_list[1].kwargs["options"]
         self.assertIn("--disable-gpu", recovery_options.arguments)
         self.assertTrue(any("chrome-compat" in argument for argument in recovery_options.arguments))
+        server_options = constructor.call_args_list[2].kwargs["options"]
+        self.assertIn("--headless=new", server_options.arguments)
+        self.assertFalse(any(argument.startswith("--window-position") for argument in server_options.arguments))
         self.assertTrue(any("软件渲染" in message for _, message in events))
+        self.assertTrue(any("无桌面模式" in message for _, message in events))
 
     def test_edge_without_live_frame_is_closed_and_falls_back_to_bundled_chrome(self):
         class FakeService:
@@ -280,6 +336,7 @@ class BrowserPauseTests(unittest.TestCase):
                   patch("xhs_console.browser.bundled_chrome_paths", return_value=(str(chrome), str(driver))),
                   patch("selenium.webdriver.Edge", return_value=edge_driver),
                   patch("selenium.webdriver.Chrome", return_value=chrome_driver),
+                  patch("xhs_console.browser.prepare_edge_driver", return_value=str(driver)),
                   patch("selenium.webdriver.edge.service.Service", FakeService),
                   patch("selenium.webdriver.chrome.service.Service", FakeService),
                   patch("xhs_console.remote_browser.RemoteBrowserTransport", FakeTransport)):

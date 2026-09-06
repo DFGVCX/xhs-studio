@@ -25,6 +25,9 @@ chrome_profile/
 Information/
 *.log
 
+# Local troubleshooting notes
+docs/browser-incident-summary.md
+
 # Editors and operating systems
 .idea/
 .vscode/

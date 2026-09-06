@@ -1,3 +1,3 @@
 """Local Xiaohongshu collection console."""
 
-__version__ = "3.4.7"
+__version__ = "3.4.8"

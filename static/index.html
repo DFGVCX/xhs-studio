@@ -8,8 +8,8 @@
   <title>小红书采集工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%23ffd84d' stroke='%2325221f' stroke-width='3'/%3E%3Cpath d='m12 9 11 7-11 7Z' fill='%2325221f'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/typography.css">
-  <link rel="stylesheet" href="/static/app.css?v=3.4.0">
-  <script defer src="/static/app.js?v=3.4.0"></script>
+  <link rel="stylesheet" href="/static/app.css?v=3.4.8">
+  <script defer src="/static/app.js?v=3.4.8"></script>
 </head>
 <body>
   <header class="app-header">
@@ -26,7 +26,7 @@
         <div class="browser-heading-title"><span class="browser-brand-dot" aria-hidden="true"></span><h1 id="browser-title">交互浏览器<span>自由浏览 · 小红书采集</span></h1><span class="live-label" id="live-label"><i aria-hidden="true"></i>未连接</span><span class="network-label direct" id="network-mode" hidden>直连网络</span></div>
         <div class="browser-heading-actions"><button type="button" class="button compact primary" id="open-browser"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>打开浏览器</button><button type="button" class="button compact secondary" id="takeover-browser" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 3 10 7-5 1-2 5Z"/></svg>接管操作</button><button type="button" class="text-button browser-close" id="close-browser" hidden>关闭浏览器</button><span class="action-divider" aria-hidden="true"></span><button type="button" class="icon-button" id="fullscreen" aria-label="全屏操作浏览器" title="全屏操作"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></button></div>
       </div>
-      <div class="browser-embed-wrap" id="browser-embed-wrap"><iframe id="browser-embed" src="/browser?v=3.2.2" title="内嵌交互浏览器，可访问网页、点击、输入和滚动" allow="clipboard-read; clipboard-write; fullscreen" allowfullscreen></iframe></div>
+      <div class="browser-embed-wrap" id="browser-embed-wrap"><iframe id="browser-embed" src="/browser?v=3.4.8" title="内嵌交互浏览器，可访问网页、点击、输入和滚动" allow="clipboard-read; clipboard-write; fullscreen" allowfullscreen></iframe></div>
       <div class="browser-resize-row"><button id="browser-height-handle" class="browser-height-handle" type="button" role="separator" aria-orientation="horizontal" aria-controls="browser-embed-wrap" aria-label="调整浏览器高度，可拖动或按上下方向键" aria-valuemin="420" aria-valuemax="1300" aria-valuenow="660"><span class="resize-grip" aria-hidden="true"></span><span>拖动调整高度</span><span id="browser-height-value">自动</span></button><button id="reset-browser-height" class="text-button" type="button" title="恢复自适应高度">恢复默认</button></div>
       <div class="browser-footnote"><span id="interaction-hint"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 2 8 6-4 1-1.5 4Z"/></svg>打开浏览器后，可直接在上方点击、输入和滚动</span><span id="frame-time">等待浏览器连接</span></div>
       <span id="browser-url" hidden>等待打开浏览器</span><span id="browser-engine" hidden>BROWSER</span>
